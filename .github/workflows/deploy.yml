@@ -31,6 +31,12 @@ jobs:
           local-dir: ./public_html/
           server-dir: ./
 
+          # Archivo de estado de sincronización propio de este pipeline.
+          # Nombre nuevo (no el default) para descartar un state viejo/corrupto
+          # que había quedado en el servidor y hacía que se saltearan archivos.
+          # Con este nombre el primer run sube TODO limpio y reconstruye el estado.
+          state-name: .gh-deploy-state.json
+
           # NO subir estos archivos (defensa en profundidad).
           # config.php ya está gitignored, pero lo excluimos igual para que
           # el deploy nunca lo suba ni lo marque para borrar en el server.
