@@ -63,8 +63,8 @@ require __DIR__ . '/../app/views/head.php';
     <?php endif; ?>
 </div>
 
-<script src="../js/api.js"></script>
-<script src="../js/wizard.js"></script>
+<script src="<?= asset('../js/api.js') ?>"></script>
+<script src="<?= asset('../js/wizard.js') ?>"></script>
 <script>
 const CATEGORIA = <?= json_encode($categoria) ?>;
 const PLAYERS = <?= json_encode(array_map(fn($p) => ['id' => (int) $p['id'], 'nombre' => $p['nombre'], 'sub_familia' => $p['sub_familia']], $players), JSON_UNESCAPED_UNICODE) ?>;

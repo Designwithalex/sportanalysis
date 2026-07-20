@@ -111,8 +111,8 @@ require __DIR__ . '/../app/views/appbar.php';
     </div>
 </div>
 
-<script src="../js/api.js"></script>
-<script src="../js/wizard.js"></script>
+<script src="<?= asset('../js/api.js') ?>"></script>
+<script src="<?= asset('../js/wizard.js') ?>"></script>
 <script>
 const alertBox = document.getElementById('alert-box');
 

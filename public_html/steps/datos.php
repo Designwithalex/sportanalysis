@@ -142,8 +142,8 @@ require __DIR__ . '/../app/views/appbar.php';
     </div>
 </div>
 
-<script src="../js/api.js"></script>
-<script src="../js/wizard.js"></script>
+<script src="<?= asset('../js/api.js') ?>"></script>
+<script src="<?= asset('../js/wizard.js') ?>"></script>
 <script>
 const dropzone = document.getElementById('dropzone');
 const input = document.getElementById('csv-input');

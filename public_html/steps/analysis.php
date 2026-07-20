@@ -393,8 +393,8 @@ require __DIR__ . '/../app/views/head.php';
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-<script src="../js/api.js"></script>
-<script src="../js/wizard.js"></script>
+<script src="<?= asset('../js/api.js') ?>"></script>
+<script src="<?= asset('../js/wizard.js') ?>"></script>
 <script>
 const ACTIVE_VIEW_ID = <?= (int) $activeViewId ?>;
 const DATASETS = <?= json_encode($datasets, JSON_UNESCAPED_UNICODE) ?>;
@@ -405,7 +405,7 @@ const PLAYER_COUNT = <?= $playerCount ?>;
 const OPEN_BASE_VIEWS = <?= $openBaseViews ? 'true' : 'false' ?>;
 const ACTIVE_VIEW_NAME = <?= json_encode($activeViewName, JSON_UNESCAPED_UNICODE) ?>;
 </script>
-<script src="../js/chart-init.js"></script>
-<script src="../js/widgets.js"></script>
+<script src="<?= asset('../js/chart-init.js') ?>"></script>
+<script src="<?= asset('../js/widgets.js') ?>"></script>
 </body>
 </html>
