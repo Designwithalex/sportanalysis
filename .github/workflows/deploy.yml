@@ -1,0 +1,44 @@
+name: Deploy to Hostinger
+
+# Sube el sitio por FTP cada vez que se hace push a main.
+# Solo el CONTENIDO de public_html/ va a la raíz web del servidor.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}   # permite lanzarlo a mano desde la pestaña Actions
+
+concurrency:
+  group: deploy-hostinger
+  cancel-in-progress: true   # si llegan dos push seguidos, deploya solo el último
+
+jobs:
+  ftp-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+
+          # Solo el contenido de public_html/ (el / final importa).
+          # El FTP de Hostinger está enjaulado en public_html, así que la
+          # raíz remota (./) YA es la raíz web del dominio.
+          local-dir: ./public_html/
+          server-dir: ./
+
+          # NO subir estos archivos (defensa en profundidad).
+          # config.php ya está gitignored, pero lo excluimos igual para que
+          # el deploy nunca lo suba ni lo marque para borrar en el server.
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/app/config.php
+            **/*.log
+            **/.DS_Store
+            **/Thumbs.db
