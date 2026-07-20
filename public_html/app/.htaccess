@@ -1,0 +1,9 @@
+# Bloquea cualquier acceso HTTP directo a esta carpeta.
+# Los archivos de app/ solo deben ser incluidos (require/include) desde api/ o steps/, nunca solicitados por URL.
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

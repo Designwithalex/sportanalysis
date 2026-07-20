@@ -1,0 +1,6 @@
+public_html/app/config.php
+/vendor/
+*.log
+.DS_Store
+Thumbs.db
+.deploy.env

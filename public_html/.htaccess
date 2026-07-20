@@ -1,0 +1,15 @@
+# Protecciones generales del webroot
+
+# Nunca servir archivos ocultos (.env, .git, etc.) si alguno llegara a subirse por error
+<FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Sin listado de directorios
+Options -Indexes

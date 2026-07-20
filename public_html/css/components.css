@@ -1,0 +1,1570 @@
+/* SportAnalysis — componentes compartidos entre pasos del wizard */
+
+.page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: var(--space-6) var(--space-5) var(--space-7);
+}
+
+.page-wide {
+    max-width: 1280px;
+}
+
+.page-header {
+    margin-bottom: var(--space-6);
+}
+
+.page-title {
+    font-size: 30px;
+    letter-spacing: -0.005em;
+    margin-bottom: var(--space-2);
+}
+
+.page-sub {
+    color: var(--text-muted);
+    font-size: 14.5px;
+    max-width: 560px;
+}
+
+/* Stepper */
+.stepper {
+    display: flex;
+    align-items: center;
+    margin-bottom: var(--space-7);
+    overflow-x: auto;
+    padding-bottom: 2px;
+}
+
+.step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    text-decoration: none;
+    color: inherit;
+}
+
+.step-badge {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: 500;
+    border: 1.5px solid var(--border);
+    color: var(--text-faint);
+    background: var(--surface);
+    flex-shrink: 0;
+}
+
+.step.done .step-badge {
+    background: var(--moss);
+    border-color: var(--moss);
+    color: var(--paper-raised);
+}
+
+.step.active .step-badge {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--paper-raised);
+    box-shadow: 0 0 0 4px var(--signal-wash);
+}
+
+.step-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-faint);
+    white-space: nowrap;
+}
+
+.step.done .step-name,
+.step.active .step-name {
+    color: var(--text);
+}
+
+.step-trace {
+    width: 36px;
+    height: 2px;
+    background: var(--border);
+    margin: 0 8px;
+    flex-shrink: 0;
+}
+
+.step-trace.done {
+    background: var(--moss);
+}
+
+/* Cards */
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+}
+
+.card + .card {
+    margin-top: var(--space-4);
+}
+
+.card-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 18px;
+    margin-bottom: var(--space-1);
+}
+
+.card-sub {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-bottom: var(--space-4);
+}
+
+/* Dropzone */
+.dropzone {
+    border: 1.5px dashed var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-6);
+    text-align: center;
+    background: var(--surface-sunken);
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.dropzone:hover,
+.dropzone.dragover {
+    border-color: var(--accent);
+    background: var(--signal-wash);
+}
+
+.dropzone input[type="file"] {
+    display: none;
+}
+
+.dropzone-label {
+    font-weight: 600;
+    font-size: 14.5px;
+    margin-bottom: 4px;
+}
+
+.dropzone-hint {
+    font-size: 12.5px;
+    color: var(--text-faint);
+}
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-ui);
+    font-weight: 600;
+    font-size: 13.5px;
+    padding: 9px 16px;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    background: var(--accent);
+    color: var(--paper-raised);
+    text-decoration: none;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+}
+
+.btn-row {
+    display: flex;
+    gap: var(--space-3);
+    margin-top: var(--space-5);
+    justify-content: flex-end;
+}
+
+.field {
+    margin-bottom: var(--space-4);
+}
+
+.field label {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.field input[type="text"],
+.field input[type="number"],
+.field select,
+.field textarea {
+    width: 100%;
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font-ui);
+}
+
+select {
+    color: var(--text);
+    background: var(--surface);
+}
+
+.field textarea {
+    resize: vertical;
+    min-height: 80px;
+    line-height: 1.5;
+}
+
+.field-hint {
+    font-size: 12px;
+    color: var(--text-faint);
+    margin-top: 6px;
+}
+
+/* Checkbox list */
+.checkbox-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-height: 220px;
+    overflow-y: auto;
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+}
+
+.checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 13.5px;
+}
+
+.checkbox-item:hover {
+    background: var(--signal-wash);
+}
+
+.checkbox-item input {
+    accent-color: var(--accent);
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+}
+
+/* View rows */
+.view-row {
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+}
+
+.view-name {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 17px;
+    margin-bottom: 4px;
+}
+
+.view-description {
+    font-size: 13.5px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    max-width: 60ch;
+}
+
+.view-datasets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 100px;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    background: var(--signal-wash);
+    color: var(--signal);
+}
+
+/* Alerts */
+.alert {
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    font-size: 13.5px;
+    margin-bottom: var(--space-4);
+    white-space: pre-line;
+}
+
+.alert-error {
+    background: var(--clay-wash);
+    color: var(--clay);
+}
+
+.alert-success {
+    background: var(--moss-wash);
+    color: var(--moss);
+}
+
+/* Data table */
+.data-table {
+    width: 100%;
+    font-size: 13.5px;
+}
+
+.data-table th {
+    text-align: left;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    font-weight: 500;
+    padding: 0 10px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.data-table td {
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.data-table tr:last-child td {
+    border-bottom: none;
+}
+
+.table-scroll {
+    overflow-x: auto;
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 100px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+}
+
+.badge-back {
+    background: var(--signal-wash);
+    color: var(--signal);
+}
+
+.badge-forward {
+    background: var(--amber-wash);
+    color: var(--amber);
+}
+
+.badge-matched {
+    background: var(--moss-wash);
+    color: var(--moss);
+}
+
+.badge-unmatched {
+    background: var(--clay-wash);
+    color: var(--clay);
+}
+
+.empty-state {
+    text-align: center;
+    padding: var(--space-6);
+    color: var(--text-faint);
+    font-size: 13.5px;
+}
+
+.dataset-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.dataset-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+}
+
+.dataset-name {
+    font-weight: 600;
+    font-size: 14.5px;
+    margin-bottom: 2px;
+}
+
+.dataset-meta {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-faint);
+}
+
+.dataset-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-shrink: 0;
+}
+
+.btn-icon {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+}
+
+/* Dashboard: view tabs */
+/* Barra de tabs: las tabs inline scrollean horizontal; el desplegable de jugadores y
+   "+ Nueva vista" quedan fuera del contenedor con overflow para no ser recortados. */
+.view-tabs-bar {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: var(--space-6);
+}
+
+.view-tabs {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.view-tab {
+    position: relative;
+    padding: 10px 16px;
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--text-faint);
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    transition: color var(--dur-fast) var(--ease-out);
+}
+
+/* Subrayado que se desliza desde la izquierda al activar/hover. */
+.view-tab::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -2px;
+    height: 2px;
+    background: var(--accent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform var(--dur-med) var(--ease-out);
+}
+
+.view-tab:hover { color: var(--text); }
+.view-tab:hover::after { transform: scaleX(0.4); }
+
+.view-tab.active {
+    color: var(--text);
+}
+
+.view-tab.dragging { opacity: 0.45; cursor: grabbing; }
+
+.view-tab.active::after { transform: scaleX(1); }
+
+.view-tab-add {
+    padding: 10px 14px;
+    color: var(--text-faint);
+    text-decoration: none;
+    font-weight: 600;
+    flex: 0 0 auto;
+}
+
+/* Trigger del desplegable de jugadores: un <button> con estética de tab. */
+.view-tabs-players { flex: 0 0 auto; align-self: stretch; display: inline-flex; align-items: flex-end; }
+button.view-tab-players {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+/* Menú de jugadores: puede tener 30+ ítems, scrollea. */
+.players-menu {
+    min-width: 220px;
+    max-height: 340px;
+    overflow-y: auto;
+}
+.players-menu .widget-menu-item.active {
+    color: var(--accent-strong);
+    background: var(--signal-wash);
+}
+
+/* CTA de vistas base en el paso Datos */
+.base-cta-card {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-4); flex-wrap: wrap;
+    border-color: var(--accent);
+}
+.base-cta-card .btn { flex: 0 0 auto; }
+
+/* ---- Modal de vistas base ---- */
+.base-cluster-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.base-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 999px;
+    background: var(--surface-2, var(--surface)); border: 1px solid var(--border);
+    font-size: 13px; font-weight: 600;
+}
+.base-chip-count {
+    font-size: 11px; color: var(--text-faint);
+    background: var(--signal-wash); border-radius: 999px; padding: 1px 7px;
+}
+.base-mode-options { display: flex; flex-direction: column; gap: 8px; }
+.base-mode-opt {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius, 10px);
+    cursor: pointer;
+}
+.base-mode-opt:has(input:checked) { border-color: var(--accent); background: var(--signal-wash); }
+.base-mode-opt input { margin-top: 3px; }
+.base-mode-opt .card-sub { margin: 2px 0 0; }
+.base-player-toggle {
+    display: flex; align-items: center; gap: 8px;
+    margin: var(--space-4) 0; font-size: 13.5px; cursor: pointer;
+}
+/* Pantalla guiada */
+.base-guided-cluster { padding: 12px 0; border-top: 1px solid var(--border); }
+.base-guided-cluster:first-child { border-top: none; }
+.base-guided-title { font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.base-guided-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.base-guided-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px;
+    font-size: 12.5px; cursor: pointer;
+}
+.base-guided-chip:has(input:checked) { border-color: var(--accent); background: var(--signal-wash); color: var(--accent-strong); }
+.base-guided-text { width: 100%; min-height: 44px; }
+.base-thinking { color: var(--text-faint); padding: 12px 0; }
+/* Progreso */
+.base-step {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13.5px;
+}
+.base-step-icon { width: 18px; text-align: center; }
+.base-step-status { color: var(--text-faint); font-size: 12.5px; margin-left: auto; }
+.base-step.done .base-step-icon { color: var(--moss, var(--accent)); }
+.base-step.active .base-step-icon { color: var(--accent); }
+.base-step.error .base-step-icon,
+.base-step.error .base-step-status { color: var(--clay); }
+
+/* Dashboard: widget grid */
+.dash-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-5);
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+/* Acciones secundarias agrupadas, para que el "+ Agregar" (signal) sea el único primario. */
+.tb-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+.tb-menu-wrap { position: relative; display: inline-flex; }
+.tb-more-btn {
+    padding: 9px 12px;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text-muted);
+}
+/* El menú de overflow reutiliza el lenguaje visual del menú de widget. */
+.tb-menu-wrap .widget-menu { min-width: 176px; }
+
+/* Primario con acento AI (abre el compositor "describí y la IA lo arma"). */
+#add-widget-btn {
+    gap: 7px;
+    transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+#add-widget-btn:hover { background: var(--accent-strong); }
+#add-widget-btn .btn-spark { font-size: 13px; }
+
+.dash-grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: var(--space-4);
+    /* Cada card toma su altura natural. Sin esto, el stretch de la grilla estira un KPI span-3
+       hasta la altura de un gráfico span-6 en la misma fila (~317px de card, ~107px de contenido)
+       y el KPI queda 66% vacío, leyéndose como roto o como "cargando". */
+    align-items: start;
+}
+
+@media (max-width: 720px) {
+    .dash-grid {
+        grid-template-columns: repeat(6, 1fr);
+    }
+}
+
+.widget-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    grid-column: span 12;
+    display: flex;
+    flex-direction: column;
+    transition: border-color var(--dur-fast) var(--ease-out);
+    /* Entrada escalonada al montar la grilla; el delay lo pone el JS por índice.
+       La animación termina en el estado en reposo (opacity:1), así que si nunca corre
+       —reduced-motion, pestaña oculta, headless— la card queda visible igual. */
+    animation: widget-in 0.42s var(--ease-out) both;
+}
+
+.widget-card:hover {
+    border-color: var(--ink-40);
+}
+
+@keyframes widget-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes menu-in {
+    from { opacity: 0; transform: scale(0.97); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes modal-in {
+    from { opacity: 0; transform: translateY(10px) scale(0.99); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes scrim-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.widget-card[data-span="3"] { grid-column: span 3; }
+.widget-card[data-span="6"] { grid-column: span 6; }
+.widget-card[data-span="12"] { grid-column: span 12; }
+
+@media (max-width: 720px) {
+    .widget-card[data-span="3"],
+    .widget-card[data-span="6"],
+    .widget-card[data-span="12"] { grid-column: span 6; }
+}
+
+/* Los gráficos toman una altura fija y el canvas la rellena, para que dos gráficos en una fila
+   queden parejos y sin espacio muerto (antes el canvas quedaba capado y la card se veía vacía). */
+.widget-card.is-chart { height: 380px; }
+.widget-card.is-chart .widget-body { position: relative; min-height: 0; }
+
+/* Reordenar por arrastre */
+.drag-handle { cursor: grab; color: var(--text-faint); }
+.drag-handle:active { cursor: grabbing; }
+.widget-card.dragging { opacity: 0.45; outline: 2px dashed var(--accent); outline-offset: -2px; }
+.widget-card.drop-target { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.widget-head {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: var(--space-3);
+}
+
+.widget-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 16px;
+}
+
+.widget-warning {
+    font-size: 11.5px;
+    color: var(--amber);
+    margin-top: 2px;
+}
+
+/* Acciones del widget: una acción inline (Editar) + un menú de overflow.
+   Antes eran 5 micro-links de 11px, 21px de alto y 2px de separación, con Eliminar idéntico a y
+   pegado a Deshacer — trampa de mis-tap en tablet. Ahora: targets cómodos (44px en touch) y la
+   acción destructiva aislada dentro del menú, con tratamiento propio. */
+.widget-controls {
+    display: flex;
+    gap: var(--space-1);
+    align-items: center;
+    flex-shrink: 0;
+    position: relative;
+}
+
+.widget-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-height: 32px;
+    padding: 5px 11px;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-weight: 600;
+    font-size: 12.5px;
+    white-space: nowrap;
+    transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.widget-action:hover {
+    background: var(--signal-wash);
+    border-color: var(--accent);
+    color: var(--accent-strong);
+}
+
+.widget-action-more {
+    min-width: 32px;
+    padding: 5px 8px;
+    font-size: 15px;
+    line-height: 1;
+}
+
+/* Menú de overflow */
+.widget-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 184px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    padding: var(--space-1);
+    z-index: var(--z-menu);
+    transform-origin: top right;
+    animation: menu-in var(--dur-fast) var(--ease-out);
+}
+
+.widget-menu[hidden] {
+    display: none;
+}
+
+.widget-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 12px;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-weight: 600;
+    font-size: 13.5px;
+    text-align: left;
+}
+
+.widget-menu-item .wm-icon {
+    width: 18px;
+    text-align: center;
+    color: var(--text-faint);
+    flex-shrink: 0;
+}
+
+.widget-menu-item:hover:not(:disabled) {
+    background: var(--signal-wash);
+    color: var(--accent-strong);
+}
+
+.widget-menu-item:hover:not(:disabled) .wm-icon {
+    color: var(--accent);
+}
+
+.widget-menu-item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.widget-menu-sep {
+    height: 1px;
+    background: var(--border);
+    margin: var(--space-1) 4px;
+}
+
+.widget-menu-item.destructive {
+    color: var(--clay);
+}
+
+.widget-menu-item.destructive .wm-icon {
+    color: var(--clay);
+}
+
+.widget-menu-item.destructive:hover:not(:disabled) {
+    background: var(--clay-wash);
+    color: var(--clay);
+}
+
+.widget-menu-item.destructive:hover:not(:disabled) .wm-icon {
+    color: var(--clay);
+}
+
+/* Targets táctiles: en pantallas touch (tablet pitch-side) todo llega a 44px. */
+@media (pointer: coarse) {
+    .widget-action { min-height: 44px; }
+    .widget-action-more { min-width: 44px; }
+    .widget-menu-item { min-height: 44px; }
+}
+
+.widget-body {
+    flex: 1;
+    min-height: 0;
+}
+
+/* En una card de gráfico (altura fija) el canvas rellena todo el cuerpo. Fuera de ahí (fallback)
+   mantiene un piso de altura para que Chart.js no lo aplaste. */
+.widget-card.is-chart .widget-body canvas { min-height: 0; max-height: none; }
+.widget-body canvas {
+    min-height: 220px;
+    max-height: 260px;
+}
+
+/* KPI card internals (coinciden con las clases generadas por WidgetRenderer) */
+.kpi-label {
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 10px;
+}
+
+.kpi-value {
+    font-family: var(--font-mono);
+    font-size: 28px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.kpi-unit {
+    font-size: 13px;
+    color: var(--text-faint);
+    font-weight: 400;
+}
+
+.kpi-delta {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    padding: 2px 7px;
+    border-radius: 100px;
+}
+
+.kpi-delta.up { background: var(--moss-wash); color: var(--moss); }
+.kpi-delta.warn { background: var(--amber-wash); color: var(--amber); }
+.kpi-delta.down { background: var(--clay-wash); color: var(--clay); }
+
+.cell-flag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 5px;
+    font-family: var(--font-mono);
+}
+
+.cell-flag.moss { background: var(--moss-wash); color: var(--moss); }
+.cell-flag.amber { background: var(--amber-wash); color: var(--amber); }
+.cell-flag.clay { background: var(--clay-wash); color: var(--clay); }
+
+.scale-selector {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    font-size: 12px;
+}
+
+.scale-selector select,
+.scale-selector input {
+    padding: 4px 6px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-sunken);
+    font-size: 12px;
+    width: 70px;
+}
+
+.table-search-input {
+    width: 100%;
+    padding: 7px 10px;
+    margin-bottom: 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-sunken);
+}
+
+/* Modal (editor manual / IA patch) */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 40px 16px;
+    overflow-y: auto;
+    z-index: var(--z-modal);
+    animation: scrim-in var(--dur-fast) var(--ease-out);
+}
+
+.modal-overlay.hidden {
+    display: none;
+}
+
+.modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-5);
+    width: 100%;
+    max-width: 640px;
+    animation: modal-in var(--dur-med) var(--ease-out);
+}
+
+.modal-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-4);
+}
+
+.modal-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 19px;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-faint);
+    font-size: 20px;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.repeatable-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.repeatable-row select,
+.repeatable-row input {
+    padding: 7px 9px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-sunken);
+    font-size: 13px;
+}
+
+.field-row {
+    display: flex;
+    gap: var(--space-3);
+}
+
+.field-row .field {
+    flex: 1;
+}
+
+.type-section {
+    display: none;
+}
+
+.type-section.active {
+    display: block;
+}
+
+.remove-row-btn {
+    background: none;
+    border: none;
+    color: var(--clay);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 4px;
+}
+
+.add-row-btn {
+    font-size: 12.5px;
+    color: var(--accent);
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    padding: 4px 0;
+}
+
+.checkbox-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    margin-bottom: var(--space-3);
+}
+
+.checkbox-inline input {
+    accent-color: var(--accent);
+    width: 15px;
+    height: 15px;
+}
+
+.ai-preview-box {
+    background: var(--surface-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    margin: var(--space-3) 0;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* ============================================================
+   SportAnalysis + Configuración (pivote: sin wizard lineal)
+   ============================================================ */
+
+/* Appbar de SportAnalysis — barra-instrumento: marca condensada + acento mono, baseline signal. */
+.appbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-5);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+    /* Baseline de instrumento: un segmento signal corto sobre la hairline inferior. */
+    background-image: linear-gradient(var(--accent), var(--accent));
+    background-repeat: no-repeat;
+    background-position: var(--space-5) 100%;
+    background-size: 44px 2px;
+}
+.appbar-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 21px;
+    letter-spacing: 0.01em;
+}
+/* Tick de instrumento antes de la marca. */
+.appbar-brand::before {
+    content: '';
+    width: 3px;
+    height: 19px;
+    border-radius: 2px;
+    background: var(--accent);
+    flex-shrink: 0;
+}
+.appbar-sub {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--signal-wash);
+    line-height: 1.4;
+}
+.appbar-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 7px 13px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.appbar-link:hover { color: var(--accent-strong); border-color: var(--accent); background: var(--signal-wash); }
+.appbar-link .appbar-link-icon { font-size: 14px; line-height: 1; }
+/* Variante primaria: la salida "Ir a SportAnalysis" desde Configuración (CTA con fill signal). */
+.appbar-link-primary,
+.appbar-link-primary:hover { color: var(--paper-raised); background: var(--accent); border-color: var(--accent); }
+.appbar-link-primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+
+/* Nav de Configuración (2 pasos) */
+.confignav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
+    flex-wrap: wrap;
+}
+.confignav-steps { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.confignav-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    margin-right: var(--space-2);
+}
+.confignav-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    color: var(--text-faint);
+    font-weight: 600;
+    font-size: 13.5px;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+}
+.confignav-step.active { color: var(--text); border-color: var(--border); background: var(--surface); }
+.confignav-num {
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 12px;
+    border-radius: 50%; border: 1.5px solid var(--border);
+}
+.confignav-step.active .confignav-num { background: var(--accent); border-color: var(--accent); color: var(--paper-raised); }
+
+/* Selector de categoría (radios como chips) */
+.category-picker { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.category-chip { position: relative; }
+.category-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.category-chip span {
+    display: inline-block;
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+}
+.category-chip input:checked + span {
+    background: var(--signal-wash);
+    border-color: var(--accent);
+    color: var(--accent-strong);
+}
+.category-chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Grupos de datasets por categoría */
+.dataset-group { margin-top: var(--space-4); }
+.dataset-group:first-of-type { margin-top: var(--space-2); }
+.dataset-group-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+    margin-bottom: var(--space-2);
+}
+.dataset-group-count {
+    background: var(--surface-sunken);
+    border-radius: 999px;
+    padding: 1px 7px;
+    margin-left: 4px;
+}
+.recon-dataset { padding: var(--space-3) 0; border-top: 1px solid var(--border); }
+.recon-dataset:first-child { border-top: none; }
+.recon-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+
+/* Acciones por fila (editar/eliminar jugador en el plantel) */
+.row-actions { text-align: right; white-space: nowrap; }
+
+/* Cabecera de cada cluster de datos con botón "Cargar a mano" */
+.dataset-group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+}
+.btn.btn-sm { padding: 5px 11px; font-size: 12.5px; }
+.dataset-empty-note { color: var(--text-faint); font-size: 12.5px; padding: 2px 0 var(--space-2); }
+
+/* Grilla de carga manual */
+.grid-scroll { overflow-x: auto; margin: var(--space-3) 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.entry-grid { border-collapse: collapse; width: 100%; font-size: 13px; }
+.entry-grid th, .entry-grid td { border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); padding: 4px 6px; text-align: left; }
+.entry-grid thead th { background: var(--surface-sunken); position: relative; white-space: nowrap; vertical-align: top; }
+.entry-grid .sticky-col {
+    position: sticky; left: 0; z-index: 1;
+    background: var(--surface); min-width: 160px; font-weight: 600;
+}
+.entry-grid thead .sticky-col { background: var(--surface-sunken); }
+.entry-grid .cell-sub { display: block; font-size: 10.5px; color: var(--text-faint); font-weight: 400; }
+.entry-grid .col-name {
+    width: 120px; font-size: 12px; font-weight: 600;
+    border: 1px solid transparent; background: transparent; color: var(--text); padding: 3px 4px; border-radius: 4px;
+}
+.entry-grid .col-name:focus { border-color: var(--border); background: var(--surface); outline: none; }
+.entry-grid .col-remove {
+    background: none; border: none; color: var(--text-faint); cursor: pointer;
+    font-size: 15px; line-height: 1; padding: 0 2px; position: absolute; top: 4px; right: 3px;
+}
+.entry-grid .col-remove:hover { color: var(--clay); }
+.entry-grid .cell-input {
+    width: 90px; border: 1px solid transparent; background: transparent; color: var(--text);
+    padding: 4px; border-radius: 4px; font-family: var(--font-mono); font-size: 12.5px;
+}
+.entry-grid .cell-input:focus { border-color: var(--accent); background: var(--surface); outline: none; }
+
+/* Sub-etiqueta de grupo dentro de una checkbox-list (datasets del editor manual) */
+.ds-group-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+    margin: var(--space-2) 0 2px;
+}
+.ds-group-label:first-child { margin-top: 0; }
+
+/* Prompt modal (agregar widget con IA) */
+.modal-narrow { max-width: 460px; }
+.empty-widgets { grid-column: 1 / -1; }
+
+/* ============================================================
+   AI hero — el momento "describí y la IA lo arma" cuando una vista está vacía.
+   ============================================================ */
+.ai-hero {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--space-4);
+    padding: clamp(var(--space-6), 8vh, 80px) var(--space-5);
+}
+.ai-hero-mark {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    color: var(--accent);
+    border-radius: 50%;
+    background: var(--signal-wash);
+    /* El único glow ambiental permitido por el sistema (focus-ring), acá como halo del instrumento. */
+    box-shadow: 0 0 0 8px var(--signal-wash);
+    animation: ai-pulse 3.2s var(--ease-out) infinite;
+}
+.ai-hero-mark span { animation: ai-spark 3.2s var(--ease-out) infinite; }
+.ai-hero-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(26px, 4vw, 34px);
+    letter-spacing: -0.01em;
+    line-height: 1.05;
+    text-wrap: balance;
+}
+.ai-hero-sub {
+    color: var(--text-muted);
+    font-size: 14.5px;
+    max-width: 46ch;
+    line-height: 1.5;
+}
+/* Caja "compositor" — parece un input, pero abre el modal real al enfocarla/clickearla. */
+.ai-hero-box {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    max-width: 540px;
+    margin-top: var(--space-1);
+    padding: 15px 16px;
+    text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-faint);
+    font-family: var(--font-ui);
+    font-size: 15px;
+    cursor: text;
+    transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.ai-hero-box:hover,
+.ai-hero-box:focus-visible {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--signal-wash);
+    outline: none;
+}
+.ai-hero-box .ai-hero-box-spark { color: var(--accent); font-size: 16px; flex-shrink: 0; }
+.ai-hero-box .ai-hero-box-cta {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    background: var(--signal-wash);
+    padding: 4px 9px;
+    border-radius: var(--radius-sm);
+}
+/* Chips de ejemplos — atacan el gap de "no hay prompts de ejemplo" y venden la promesa del producto. */
+.ai-hero-examples {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-2);
+    max-width: 620px;
+}
+.ai-hero-eyebrow {
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-faint);
+    margin-bottom: 2px;
+}
+.ai-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 13px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-weight: 600;
+    font-size: 12.5px;
+    transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.ai-chip .ai-chip-bolt { color: var(--amber); font-size: 12px; }
+.ai-chip:hover {
+    border-color: var(--accent);
+    color: var(--accent-strong);
+    background: var(--signal-wash);
+    transform: translateY(-1px);
+}
+
+@keyframes ai-pulse {
+    0%, 100% { box-shadow: 0 0 0 8px var(--signal-wash); }
+    50%      { box-shadow: 0 0 0 14px transparent; }
+}
+@keyframes ai-spark {
+    0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; }
+    50%      { transform: scale(1.14) rotate(8deg); opacity: 0.88; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .ai-hero-mark, .ai-hero-mark span { animation: none !important; }
+    .ai-hero-box, .ai-chip { transition: none !important; }
+}
+/* Ejemplos dentro del compositor (chips que rellenan el pedido). */
+.pm-examples {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+}
+.pm-examples-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+}
+.pm-examples .ai-chip { font-size: 12px; padding: 6px 11px; }
+
+.pm-questions-box {
+    background: var(--signal-wash);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3) var(--space-4);
+    margin: var(--space-3) 0;
+}
+.pm-questions-title { font-weight: 600; font-size: 13px; margin-bottom: var(--space-2); }
+.pm-preview-box {
+    background: var(--surface-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    margin: var(--space-3) 0;
+}
+/* Estado "la IA está armando" — skeleton con shimmer signal. */
+.ai-thinking {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    margin-top: var(--space-3);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+.ai-thinking-spark {
+    font-size: 20px;
+    color: var(--accent);
+    animation: ai-spark 1.4s var(--ease-out) infinite;
+}
+.ai-thinking-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.ai-thinking-text { font-size: 13px; font-weight: 600; color: var(--text-muted); }
+.ai-thinking-bar {
+    height: 9px;
+    border-radius: 5px;
+    background: linear-gradient(90deg, var(--border) 25%, var(--signal-wash) 50%, var(--border) 75%);
+    background-size: 200% 100%;
+    animation: ai-shimmer 1.3s linear infinite;
+}
+.ai-thinking-bar.short { width: 62%; }
+@keyframes ai-shimmer {
+    from { background-position: 200% 0; }
+    to   { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .ai-thinking-spark, .ai-thinking-bar { animation: none !important; }
+}
+
+.pm-preview-title { font-family: var(--font-display); font-weight: 700; font-size: 18px; }
+.pm-preview-type {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: var(--space-1) 0 var(--space-3);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    background: var(--signal-wash);
+    padding: 2px 9px;
+    border-radius: 999px;
+}
+
+/* Resumen en español plano de lo que arma la IA. El usuario (no técnico) tiene que poder confiar
+   en lo que va a agregar sin leer JSON. La config cruda queda disponible pero plegada. */
+.pm-summary {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+}
+.pm-summary-row {
+    display: grid;
+    grid-template-columns: 116px 1fr;
+    gap: var(--space-3);
+    align-items: baseline;
+    font-size: 13.5px;
+}
+.pm-summary-key {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-faint);
+}
+.pm-summary-val { color: var(--text); }
+.pm-summary-val strong { font-weight: 600; }
+
+.pm-preview-tech {
+    margin-top: var(--space-3);
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-2);
+}
+.pm-preview-tech > summary {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.pm-preview-tech > summary::-webkit-details-marker { display: none; }
+.pm-preview-tech > summary::before {
+    content: '▸';
+    color: var(--text-faint);
+    transition: transform var(--dur-fast) var(--ease-out);
+}
+.pm-preview-tech[open] > summary::before { transform: rotate(90deg); }
+.pm-preview-json {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    white-space: pre-wrap;
+    max-height: 220px;
+    overflow-y: auto;
+    color: var(--text-muted);
+    margin: var(--space-2) 0 0;
+}
+
+/* Bloque de filtro propio del widget en el editor manual */
+.wf-filter-block {
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-3);
+    margin-top: var(--space-2);
+}
+
+/* view-tab-add como <button> (antes era <a>) */
+button.view-tab-add {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+}
+button.view-tab-add:hover { color: var(--text); }
+
+/* Alternativa sin movimiento: además del reset global de duraciones en base.css, apagamos las
+   animaciones de entrada por completo para que ninguna quede a mitad de camino ni dependa del
+   delay por índice (que el reset global no toca). El estado final ya es el visible. */
+@media (prefers-reduced-motion: reduce) {
+    .widget-card,
+    .widget-menu,
+    .modal,
+    .modal-overlay {
+        animation: none !important;
+    }
+    .view-tab::after,
+    .pm-preview-tech > summary::before,
+    .widget-card,
+    .widget-action {
+        transition: none !important;
+    }
+}
