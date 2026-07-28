@@ -1,0 +1,1208 @@
+/* ============================================================================
+   SportAnalysis — landing pública
+   ----------------------------------------------------------------------------
+   Solo lo carga la landing (head.php con $useLandingCss = true). Depende de
+   tokens.css + base.css + components.css: acá NO se define un solo color, una
+   sola fuente ni un solo radio — todo sale de los tokens del sistema, así el
+   dark mode funciona sin escribir un segundo bloque de colores.
+
+   La nav pública (.publicnav*) y todo lo de auth viven en components.css,
+   porque login/registro/perfil no cargan este archivo.
+
+   Convenciones que se respetan acá:
+   · Hairlines de 1px --border en vez de sombras. El único glow es el anillo
+     0 0 0 4px var(--signal-wash) de foco/hover.
+   · Barlow Condensed solo títulos y marca. IBM Plex Mono solo datos y
+     metadatos (eyebrows, cifras, etiquetas de widget). El resto, Plex Sans.
+   · Ningún texto en --accent sobre --signal-wash (ese par da ~3.8:1, falla AA).
+     Los eyebrows van en --accent-strong sobre superficie plana (~4.8:1 claro,
+     ~10:1 oscuro); el texto sobre wash va en --text-muted.
+   · Una sola curva (--ease-out) en dos duraciones. Movimiento: dos elementos
+     animados en toda la página, ambos apagados con prefers-reduced-motion.
+   · Breakpoints: 1024px (colapso de grillas de 2+ columnas) y 720px (mobile,
+     valor canónico del sistema). Desktop-first con max-width, como el resto.
+   ============================================================================ */
+
+/* Constantes de layout locales de la landing. No son tokens de diseño (no hay
+   color acá y no cambian con el tema), y este archivo solo lo carga la landing,
+   así que no ensucian tokens.css. */
+:root {
+    --lp-max: 1120px;
+    --lp-gutter: var(--space-5);
+    --lp-section-y: clamp(56px, 8vw, 96px);
+}
+
+/* Nav por anclas: scroll suave, apagado con reduced-motion (ver el bloque final). */
+html {
+    scroll-behavior: smooth;
+}
+
+/* No se pone overflow-x:hidden en <body>: rompería el position:sticky de la nav
+   pública. Lo único que puede sobresalir es la grilla del hero, y esa la recorta
+   el propio .lp-hero con su overflow:hidden. */
+
+/* ============================================================
+   1. ESTRUCTURA COMÚN
+   ------------------------------------------------------------
+   Markup de una sección tipo:
+     <section class="lp-section" id="como-funciona">
+       <div class="lp-wrap">
+         <header class="lp-section-head">
+           <p class="lp-eyebrow">Cómo funciona</p>
+           <h2 class="lp-title">De la planilla al tablero en cuatro pasos</h2>
+           <p class="lp-lede">…</p>
+         </header>
+         …contenido…
+       </div>
+     </section>
+   .lp-section-alt agrega fondo hundido para alternar el ritmo vertical.
+   ============================================================ */
+.lp-wrap {
+    max-width: var(--lp-max);
+    margin: 0 auto;
+    padding-left: var(--lp-gutter);
+    padding-right: var(--lp-gutter);
+}
+
+.lp-section {
+    padding: var(--lp-section-y) 0;
+    border-top: 1px solid var(--border);
+    /* La nav pública es sticky: sin esto el ancla queda tapada por la barra. */
+    scroll-margin-top: 76px;
+}
+
+.lp-section-alt {
+    background: var(--surface-sunken);
+}
+
+.lp-section-head {
+    max-width: 64ch;
+    margin-bottom: var(--space-6);
+}
+
+/* Eyebrow mono con el tick de firma. Sin chip: el acento sobre wash no llega a AA
+   a este tamaño, y el tick ya trae la identidad del instrumento. */
+.lp-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent-strong);
+    margin-bottom: var(--space-3);
+}
+
+.lp-eyebrow::before {
+    content: '';
+    width: 3px;
+    height: 13px;
+    border-radius: 2px;
+    background: var(--accent);
+    flex-shrink: 0;
+}
+
+.lp-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(28px, 3.6vw, 42px);
+    line-height: 1.04;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+}
+
+.lp-lede {
+    margin-top: var(--space-3);
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1.55;
+    max-width: 58ch;
+}
+
+/* Modificador de .btn para las CTA grandes de la landing.
+   Markup: <a class="btn lp-btn" href="registro.php">Crear cuenta</a>
+           <a class="btn btn-secondary lp-btn" href="#como-funciona">Ver cómo funciona</a> */
+.lp-btn {
+    min-height: 46px;
+    padding: 12px 20px;
+    font-size: 14.5px;
+    transition: background var(--dur-fast) var(--ease-out),
+                border-color var(--dur-fast) var(--ease-out),
+                color var(--dur-fast) var(--ease-out);
+}
+
+.lp-btn:not(.btn-secondary):hover {
+    background: var(--accent-strong);
+}
+
+.lp-btn.btn-secondary:hover {
+    border-color: var(--accent);
+    color: var(--accent-strong);
+    background: var(--signal-wash);
+}
+
+.lp-btn:focus-visible {
+    box-shadow: 0 0 0 4px var(--signal-wash);
+}
+
+/* ============================================================
+   2. HERO
+   ------------------------------------------------------------
+   Markup:
+     <section class="lp-hero">
+       <div class="lp-wrap lp-hero-inner">
+         <div class="lp-hero-copy">
+           <p class="lp-eyebrow">Para preparadores físicos</p>
+           <h1 class="lp-hero-title">Tus CSV de siempre, <em>leídos como un tablero</em></h1>
+           <p class="lp-hero-lede">…</p>
+           <div class="lp-hero-ctas">
+             <a class="btn lp-btn" href="registro.php">Crear cuenta</a>
+             <a class="btn btn-secondary lp-btn" href="#como-funciona">Ver cómo funciona</a>
+           </div>
+           <ul class="lp-hero-note">
+             <li>Sin planilla nueva</li><li>Sin plantilla fija</li><li>Datos de tu club</li>
+           </ul>
+         </div>
+         <div class="lp-hero-panel" aria-hidden="true"> …ver bloque 3… </div>
+       </div>
+     </section>
+   El <h1> admite un <em> para teñir una frase con el acento (em sin itálica).
+   El panel va aria-hidden: es una foto del producto, no información; la promesa
+   real la carga el texto de la izquierda.
+   ============================================================ */
+.lp-hero {
+    position: relative;
+    overflow: hidden;
+    padding: clamp(40px, 7vw, 88px) 0 var(--lp-section-y);
+}
+
+/* Grilla de medición: la firma de "instrumento" llevada al fondo del hero.
+   Se dibuja con --border, así que se atenúa sola en dark mode. La máscara la
+   desvanece hacia abajo/derecha para que no compita con el texto. */
+.lp-hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.6;
+    background-image:
+        repeating-linear-gradient(to right, var(--border) 0 1px, transparent 1px 76px),
+        repeating-linear-gradient(to bottom, var(--border) 0 1px, transparent 1px 76px);
+    -webkit-mask-image: radial-gradient(120% 88% at 12% 0%, #000 0%, transparent 68%);
+    mask-image: radial-gradient(120% 88% at 12% 0%, #000 0%, transparent 68%);
+}
+
+.lp-hero-inner {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: clamp(32px, 5vw, 64px);
+    align-items: center;
+}
+
+.lp-hero-title {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(38px, 6vw, 64px);
+    line-height: 0.98;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+}
+
+.lp-hero-title em {
+    font-style: normal;
+    color: var(--accent-strong);
+}
+
+.lp-hero-lede {
+    margin-top: var(--space-4);
+    color: var(--text-muted);
+    font-size: clamp(15px, 1.4vw, 17px);
+    line-height: 1.55;
+    max-width: 50ch;
+}
+
+.lp-hero-ctas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-top: var(--space-5);
+}
+
+/* Micro-datos mono con tick corto. Es metadata, por eso mono. */
+.lp-hero-note {
+    list-style: none;
+    margin: var(--space-5) 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+}
+
+.lp-hero-note li {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.lp-hero-note li::before {
+    content: '';
+    width: 2px;
+    height: 11px;
+    border-radius: 1px;
+    background: var(--accent);
+    flex-shrink: 0;
+}
+
+/* ============================================================
+   3. PANEL DE MUESTRA DEL DASHBOARD (dentro del hero)
+   ------------------------------------------------------------
+   Todo dibujado con CSS + un <svg> inline: cero imágenes, cero requests,
+   cero layout shift, y se re-tinta solo en dark mode.
+   Markup:
+     <div class="lp-hero-panel" aria-hidden="true">
+       <div class="lp-frame">
+         <div class="lp-frame-bar">
+           <span class="lp-frame-title">Carga semanal — Forwards</span>
+           <span class="lp-frame-live">En vivo</span>
+         </div>
+         <div class="lp-frame-body">
+           <div class="lp-mini">
+             <p class="lp-mini-label">Distancia total</p>
+             <p class="lp-mini-value">6.482<span class="lp-mini-unit">m</span></p>
+             <span class="lp-mini-delta">+8%</span>
+           </div>
+           <div class="lp-mini"> …otro KPI… </div>
+           <div class="lp-mini lp-mini-wide">
+             <p class="lp-mini-label">Metros por sesión</p>
+             <div class="lp-bars">
+               <i style="--h:38%"></i><i style="--h:62%"></i><i style="--h:47%"></i>
+               <i style="--h:83%"></i><i style="--h:55%"></i><i style="--h:71%"></i>
+             </div>
+           </div>
+           <div class="lp-mini lp-mini-wide">
+             <p class="lp-mini-label">Velocidad máxima</p>
+             <div class="lp-spark">
+               <svg viewBox="0 0 200 48" preserveAspectRatio="none" focusable="false">
+                 <polyline points="0,38 33,26 66,31 100,14 133,20 166,9 200,16"/>
+               </svg>
+             </div>
+           </div>
+         </div>
+       </div>
+     </div>
+   ============================================================ */
+.lp-hero-panel {
+    /* Una sola animación de entrada en toda la página. Termina en el estado en
+       reposo, así que si nunca corre (reduced-motion, pestaña oculta) el panel
+       igual queda visible. */
+    animation: lp-rise 0.5s var(--ease-out) both;
+}
+
+.lp-frame {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    overflow: hidden;
+}
+
+/* Mismo baseline signal de 44×2px del appbar: el panel se lee como el producto. */
+.lp-frame-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    background-image: linear-gradient(var(--accent), var(--accent));
+    background-repeat: no-repeat;
+    background-position: 14px 100%;
+    background-size: 44px 2px;
+}
+
+.lp-frame-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 14.5px;
+}
+
+.lp-frame-live {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--moss);
+}
+
+/* Segundo (y último) elemento animado: el punto de "en vivo". Sentido: el
+   tablero se recalcula solo cuando entran datos nuevos. */
+.lp-frame-live::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--moss);
+    animation: lp-pulse 2.6s var(--ease-out) infinite;
+}
+
+.lp-frame-body {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    padding: 14px;
+    background: var(--surface-sunken);
+}
+
+.lp-mini {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    padding: 11px 12px;
+}
+
+.lp-mini-wide {
+    grid-column: 1 / -1;
+}
+
+.lp-mini-label {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-faint);
+    margin-bottom: 7px;
+}
+
+.lp-mini-value {
+    font-family: var(--font-mono);
+    font-size: 22px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+}
+
+.lp-mini-unit {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    font-weight: 400;
+}
+
+.lp-mini-delta {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 2px 7px;
+    border-radius: 100px;
+    background: var(--moss-wash);
+    color: var(--moss);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+}
+
+.lp-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    height: 66px;
+}
+
+.lp-bars i {
+    flex: 1;
+    height: var(--h, 50%);
+    background: var(--accent);
+    border-radius: 3px 3px 0 0;
+    opacity: 0.85;
+}
+
+.lp-spark svg {
+    width: 100%;
+    height: 56px;
+}
+
+.lp-spark polyline {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+
+/* ============================================================
+   4. PROBLEMA → PROPUESTA
+   ------------------------------------------------------------
+   Tres paneles con flechas: CSV crudo → descripción en lenguaje natural →
+   grilla de widgets. La flecha es un elemento propio de la grilla para que
+   pueda rotar 90° al apilarse en mobile.
+   Markup:
+     <div class="lp-flow">
+       <article class="lp-flow-card is-raw">
+         <p class="lp-flow-kicker">Lo que tenés</p>
+         <h3 class="lp-flow-title">Un CSV con las columnas que usa tu club</h3>
+         <pre class="lp-csv">jugador,fecha,distancia_m,sprints
+Acosta,12/03,6482,14
+Benítez,12/03,5910,11</pre>
+       </article>
+       <div class="lp-flow-arrow" aria-hidden="true">
+         <svg viewBox="0 0 24 24" focusable="false"><path d="M4 12h14M13 6l6 6-6 6"/></svg>
+       </div>
+       <article class="lp-flow-card">
+         <p class="lp-flow-kicker">Lo que pedís</p>
+         <h3 class="lp-flow-title">Una frase, en tu idioma</h3>
+         <p class="lp-quote">"Quiero ver la carga semanal de los forwards y quién está
+            por debajo de su promedio."</p>
+       </article>
+       <div class="lp-flow-arrow" aria-hidden="true"> …mismo svg… </div>
+       <article class="lp-flow-card is-out">
+         <p class="lp-flow-kicker">Lo que sale</p>
+         <h3 class="lp-flow-title">Una grilla de widgets, editable</h3>
+         <div class="lp-flow-grid" aria-hidden="true">
+           <i></i><i></i><i class="wide"></i><i class="wide"></i>
+         </div>
+       </article>
+     </div>
+   ============================================================ */
+.lp-flow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: stretch;
+}
+
+.lp-flow-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    min-width: 0;
+}
+
+/* El "antes" se hunde; el "después" se marca con la hairline de acento. */
+.lp-flow-card.is-raw {
+    background: var(--surface-sunken);
+}
+
+.lp-flow-card.is-out {
+    border-color: var(--accent);
+}
+
+.lp-flow-kicker {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-faint);
+}
+
+.lp-flow-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 18px;
+    line-height: 1.15;
+}
+
+/* Datos crudos: mono, scroll horizontal propio, nunca desborda la tarjeta. */
+.lp-csv {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.8;
+    color: var(--text-muted);
+    white-space: pre;
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
+
+.lp-quote {
+    border-left: 2px solid var(--accent);
+    padding-left: var(--space-3);
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--text);
+}
+
+/* Mini grilla de widgets: bloques, sin contenido. Es un pictograma. */
+.lp-flow-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    margin-top: auto;
+}
+
+.lp-flow-grid i {
+    display: block;
+    height: 30px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--signal-wash);
+}
+
+.lp-flow-grid i.wide {
+    grid-column: 1 / -1;
+    height: 40px;
+}
+
+.lp-flow-arrow {
+    align-self: center;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-faint);
+}
+
+.lp-flow-arrow::before {
+    content: '';
+    width: 18px;
+    height: 1px;
+    background: var(--border);
+}
+
+.lp-flow-arrow svg {
+    width: 20px;
+    height: 20px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* ============================================================
+   5. CÓMO FUNCIONA — Plantel → Datos → Vistas → Dashboard
+   ------------------------------------------------------------
+   Único bloque numerado de la landing, y con razón: es literalmente el orden
+   del wizard. El número reutiliza el lenguaje de .confignav-num / .step-badge,
+   y el segmento de 44×2px sobre la línea superior de cada paso arma una escala
+   de medición a lo ancho de la sección.
+   Markup:
+     <ol class="lp-steps">
+       <li class="lp-step">
+         <span class="lp-step-num" aria-hidden="true">1</span>
+         <h3 class="lp-step-title">Plantel</h3>
+         <p class="lp-step-text">Subís la nómina una vez. Es la tabla maestra…</p>
+       </li>
+       …3 más…
+     </ol>
+   El número va aria-hidden porque <ol> ya numera para el lector de pantalla.
+   ============================================================ */
+.lp-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-5);
+}
+
+.lp-step {
+    position: relative;
+    padding-top: var(--space-4);
+    border-top: 2px solid var(--border);
+}
+
+.lp-step::before {
+    content: '';
+    position: absolute;
+    top: -2px;
+    left: 0;
+    width: 44px;
+    height: 2px;
+    background: var(--accent);
+}
+
+.lp-step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    margin-bottom: var(--space-3);
+    border: 1.5px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+.lp-step-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 19px;
+    margin-bottom: 6px;
+}
+
+.lp-step-text {
+    color: var(--text-muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+}
+
+/* ============================================================
+   6. LIBRERÍA DE WIDGETS
+   ------------------------------------------------------------
+   Los 5 tipos. El pictograma de cada uno está dibujado con CSS/SVG y va
+   aria-hidden; el nombre y la descripción cargan el significado.
+   Markup de una tarjeta:
+     <article class="lp-widget">
+       <div class="lp-widget-glyph lp-glyph-kpi" aria-hidden="true">
+         <span class="lp-glyph-kpi-label">Distancia</span>
+         <span class="lp-glyph-kpi-value">6.482</span>
+       </div>
+       <h3 class="lp-widget-name">KPI card</h3>
+       <p class="lp-widget-desc">Un número que importa, con su comparación…</p>
+       <span class="lp-widget-tag">escala %</span>
+     </article>
+   Pictogramas disponibles (segunda clase del .lp-widget-glyph):
+     .lp-glyph-kpi    → <span class="lp-glyph-kpi-label">…</span>
+                        <span class="lp-glyph-kpi-value">…</span>
+     .lp-glyph-rows   → <i style="--w:100%"></i><i style="--w:80%" class="ok"></i>
+                        <i style="--w:64%" class="hot"></i><i style="--w:88%"></i>
+     .lp-glyph-line   → <svg viewBox="0 0 200 60" preserveAspectRatio="none">
+                          <polyline points="…"/><polyline class="alt" points="…"/></svg>
+     .lp-glyph-bars   → <i style="--h:40%"></i>… (5 o 6)
+     .lp-glyph-stack  → <i style="--h:74%"><span class="sg-a" style="--s:46%"></span>
+                           <span class="sg-b" style="--s:32%"></span>
+                           <span class="sg-c" style="--s:22%"></span></i>  ×4
+                        (--h = alto de la columna; --s = alto de cada segmento
+                         dentro de la columna, deben sumar 100%)
+   ============================================================ */
+.lp-widgets {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-4);
+}
+
+.lp-widget {
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+/* Mismo hover que .widget-card del dashboard: la hairline se oscurece, nada más. */
+.lp-widget:hover {
+    border-color: var(--ink-40);
+}
+
+.lp-widget-glyph {
+    height: 78px;
+    margin-bottom: var(--space-4);
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    overflow: hidden;
+}
+
+.lp-widget-name {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 17px;
+}
+
+.lp-widget-desc {
+    margin-top: 5px;
+    color: var(--text-muted);
+    font-size: 13.5px;
+    line-height: 1.5;
+}
+
+/* Pill mono sobre wash: texto en --text-muted, nunca en --accent (contraste). */
+.lp-widget-tag {
+    display: inline-block;
+    margin-top: var(--space-3);
+    padding: 2px 9px;
+    border-radius: 100px;
+    background: var(--signal-wash);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+
+/* --- pictograma: KPI card --- */
+.lp-glyph-kpi {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+}
+
+.lp-glyph-kpi-label {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-faint);
+}
+
+.lp-glyph-kpi-value {
+    font-family: var(--font-mono);
+    font-size: 26px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+/* --- pictograma: tabla con formato condicional --- */
+.lp-glyph-rows {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 7px;
+}
+
+.lp-glyph-rows i {
+    display: block;
+    width: var(--w, 100%);
+    height: 8px;
+    border-radius: 2px;
+    /* --ink-40 al 35% en vez de --border: sobre surface-sunken oscuro la hairline
+       queda por debajo del umbral de visibilidad y las filas neutras desaparecen. */
+    background: var(--ink-40);
+    opacity: 0.4;
+}
+
+.lp-glyph-rows i.ok { background: var(--moss); opacity: 0.8; }
+.lp-glyph-rows i.hot { background: var(--clay); opacity: 0.8; }
+
+/* --- pictograma: línea temporal --- */
+.lp-glyph-line {
+    display: flex;
+    align-items: center;
+}
+
+.lp-glyph-line svg {
+    width: 100%;
+    height: 54px;
+}
+
+.lp-glyph-line polyline {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.lp-glyph-line polyline.alt {
+    stroke: var(--amber);
+    stroke-dasharray: 4 4;
+}
+
+/* --- pictograma: barra por jugador/categoría --- */
+.lp-glyph-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 7px;
+}
+
+.lp-glyph-bars i {
+    flex: 1;
+    height: var(--h, 50%);
+    background: var(--accent);
+    border-radius: 3px 3px 0 0;
+    opacity: 0.85;
+}
+
+/* --- pictograma: barra apilada --- */
+.lp-glyph-stack {
+    display: flex;
+    align-items: flex-end;
+    gap: 7px;
+}
+
+.lp-glyph-stack i {
+    flex: 1;
+    /* Cada columna lleva su propia altura total (--h) además de sus segmentos (--s):
+       sin eso las cuatro columnas llegan al techo y el pictograma se lee como un
+       bloque sólido, no como un gráfico. */
+    height: var(--h, 100%);
+    display: flex;
+    flex-direction: column-reverse;
+    border-radius: 3px 3px 0 0;
+    overflow: hidden;
+}
+
+.lp-glyph-stack span {
+    display: block;
+    height: var(--s, 33%);
+}
+
+.lp-glyph-stack .sg-a { background: var(--accent); }
+.lp-glyph-stack .sg-b { background: var(--amber); }
+.lp-glyph-stack .sg-c { background: var(--moss); }
+
+/* ============================================================
+   7. CONFIANZA — "Los datos de tu club son tuyos"
+   ------------------------------------------------------------
+   Estados semánticos, no acento de marca: acá el color que corresponde es
+   --moss (on-target / a salvo).
+   Markup:
+     <div class="lp-trust">
+       <div class="lp-trust-copy">
+         <p class="lp-eyebrow">Aislamiento</p>
+         <h2 class="lp-title">Los datos de tu club son tuyos</h2>
+         <p class="lp-lede">…</p>
+       </div>
+       <ul class="lp-trust-list">
+         <li class="lp-trust-item">
+           <span class="lp-trust-icon" aria-hidden="true">
+             <svg viewBox="0 0 24 24" focusable="false"><path d="M20 6L9 17l-5-5"/></svg>
+           </span>
+           <div>
+             <p class="lp-trust-name">Un club por instalación</p>
+             <p class="lp-trust-text">…</p>
+           </div>
+         </li>
+         …
+       </ul>
+     </div>
+   ============================================================ */
+.lp-trust {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    gap: clamp(32px, 5vw, 64px);
+    align-items: start;
+}
+
+.lp-trust-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.lp-trust-item {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-4) 0;
+    border-top: 1px solid var(--border);
+}
+
+.lp-trust-item:first-child {
+    border-top: none;
+    padding-top: 0;
+}
+
+.lp-trust-icon {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    background: var(--moss-wash);
+    color: var(--moss);
+}
+
+.lp-trust-icon svg {
+    width: 15px;
+    height: 15px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.lp-trust-name {
+    font-weight: 600;
+    font-size: 14.5px;
+}
+
+.lp-trust-text {
+    margin-top: 3px;
+    color: var(--text-muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+}
+
+/* ============================================================
+   8. CTA FINAL
+   ------------------------------------------------------------
+   Markup:
+     <section class="lp-section">
+       <div class="lp-wrap">
+         <div class="lp-cta">
+           <h2 class="lp-cta-title">Probalo con los datos del jueves pasado</h2>
+           <p class="lp-cta-sub">…</p>
+           <div class="lp-cta-actions">
+             <a class="btn lp-btn" href="registro.php">Crear cuenta</a>
+             <a class="btn btn-secondary lp-btn" href="login.php">Ya tengo cuenta</a>
+           </div>
+         </div>
+       </div>
+     </section>
+   ============================================================ */
+.lp-cta {
+    position: relative;
+    overflow: hidden;
+    padding: clamp(36px, 5vw, 60px) var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    background-image: radial-gradient(85% 130% at 50% 0%, var(--signal-wash), transparent 68%);
+    text-align: center;
+}
+
+/* Segmento signal, arriba a la izquierda: cierra la página con la misma firma
+   con la que abrió la nav. */
+.lp-cta::before {
+    content: '';
+    position: absolute;
+    top: -1px;
+    left: var(--space-5);
+    width: 44px;
+    height: 2px;
+    background: var(--accent);
+}
+
+.lp-cta-title {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(28px, 4vw, 44px);
+    line-height: 1.02;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+}
+
+.lp-cta-sub {
+    margin: var(--space-3) auto 0;
+    max-width: 48ch;
+    color: var(--text-muted);
+    font-size: 15.5px;
+    line-height: 1.55;
+}
+
+.lp-cta-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-3);
+    margin-top: var(--space-5);
+}
+
+/* ============================================================
+   9. FOOTER
+   ------------------------------------------------------------
+   Markup:
+     <footer class="lp-footer">
+       <div class="lp-wrap lp-footer-inner">
+         <div class="lp-footer-brand">SportAnalysis</div>
+         <nav class="lp-footer-links" aria-label="Pie">
+           <a href="#como-funciona">Cómo funciona</a>
+           <a href="#widgets">Widgets</a>
+           <a href="login.php">Ingresar</a>
+         </nav>
+         <p class="lp-footer-legal">© 2026 · Hecho para un club, no para un mercado</p>
+       </div>
+     </footer>
+   ============================================================ */
+.lp-footer {
+    border-top: 1px solid var(--border);
+    padding: var(--space-6) 0;
+}
+
+.lp-footer-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+}
+
+.lp-footer-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 18px;
+    letter-spacing: 0.01em;
+}
+
+.lp-footer-brand::before {
+    content: '';
+    width: 3px;
+    height: 16px;
+    border-radius: 2px;
+    background: var(--accent);
+    flex-shrink: 0;
+}
+
+.lp-footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+}
+
+.lp-footer-links a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    color: var(--text-muted);
+    font-size: 13px;
+    text-decoration: none;
+    transition: color var(--dur-fast) var(--ease-out);
+}
+
+.lp-footer-links a:hover {
+    color: var(--accent-strong);
+    text-decoration: underline;
+}
+
+.lp-footer-links a:focus-visible {
+    box-shadow: 0 0 0 4px var(--signal-wash);
+    border-radius: var(--radius-sm);
+}
+
+.lp-footer-legal {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-faint);
+}
+
+/* ============================================================
+   10. RESPONSIVE
+   ------------------------------------------------------------
+   1024px: colapsan las grillas de 2+ columnas del contenido ancho.
+   720px:  breakpoint canónico del sistema. Todo a una columna.
+   ============================================================ */
+@media (max-width: 1024px) {
+    .lp-hero-inner {
+        grid-template-columns: 1fr;
+    }
+
+    /* En una columna el panel va abajo del texto y no compite con el título. */
+    .lp-hero-panel {
+        max-width: 620px;
+    }
+
+    .lp-flow {
+        grid-template-columns: 1fr;
+    }
+
+    /* La flecha pasa a vertical y se centra entre paneles. */
+    .lp-flow-arrow {
+        justify-self: center;
+        transform: rotate(90deg);
+    }
+
+    .lp-steps {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .lp-widgets {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .lp-trust {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 720px) {
+    :root {
+        --lp-gutter: var(--space-4);
+    }
+
+    /* La grilla de medición se achica para no leerse como un cuadriculado grueso. */
+    .lp-hero::before {
+        background-image:
+            repeating-linear-gradient(to right, var(--border) 0 1px, transparent 1px 52px),
+            repeating-linear-gradient(to bottom, var(--border) 0 1px, transparent 1px 52px);
+        opacity: 0.45;
+    }
+
+    .lp-hero-ctas .lp-btn {
+        flex: 1 1 100%;
+        justify-content: center;
+    }
+
+    .lp-hero-note {
+        gap: var(--space-2) var(--space-4);
+    }
+
+    .lp-frame-body {
+        grid-template-columns: 1fr;
+    }
+
+    .lp-steps,
+    .lp-widgets {
+        grid-template-columns: 1fr;
+        gap: var(--space-4);
+    }
+
+    .lp-cta-actions .lp-btn {
+        flex: 1 1 100%;
+        justify-content: center;
+    }
+
+    .lp-footer-inner {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-3);
+    }
+}
+
+/* Targets táctiles: mismo criterio que el dashboard (44px en pantallas touch). */
+@media (pointer: coarse) {
+    .lp-footer-links a {
+        min-height: 44px;
+    }
+}
+
+/* ============================================================
+   11. MOVIMIENTO
+   ------------------------------------------------------------
+   Dos animaciones en toda la landing y ninguna decorativa:
+   lp-rise da continuidad espacial al panel del hero al cargar; lp-pulse dice
+   que el tablero se recalcula solo. Ambas terminan (o descansan) en el estado
+   visible, así que apagarlas no rompe nada.
+   ============================================================ */
+@keyframes lp-rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes lp-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 var(--moss-wash); }
+    50%      { box-shadow: 0 0 0 5px transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+
+    .lp-hero-panel,
+    .lp-frame-live::before {
+        animation: none !important;
+    }
+
+    .lp-btn,
+    .lp-widget,
+    .lp-footer-links a {
+        transition: none !important;
+    }
+}

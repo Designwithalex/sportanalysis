@@ -1568,3 +1568,733 @@ button.view-tab-add:hover { color: var(--text); }
         transition: none !important;
     }
 }
+
+/* ============================================================
+   SUPERFICIES PÚBLICAS — nav pública, auth y estados de formulario
+   ------------------------------------------------------------
+   Bloque agregado al final a propósito: no toca ni reordena nada de lo de arriba.
+   Vive acá y no en landing.css porque login / registro / perfil cargan solamente
+   tokens + base + components; landing.css es exclusivo de la landing.
+
+   Regla de contraste que se aplica en todo este bloque: NINGÚN texto usa --accent
+   sobre --signal-wash. Medido sobre paper, ese par da ~3.8:1 (falla AA). El texto
+   sobre wash usa --text-muted (~4.9:1 en claro, ~6.6:1 en oscuro) y el acento se
+   reserva para bordes, ticks y fills donde no hay texto encima.
+   ============================================================ */
+
+/* ---- Skip link (a11y: primer tabulable de toda pantalla pública) ----
+   Markup: <a class="publicnav-skip" href="#contenido">Saltar al contenido</a>
+   La página debe tener <main id="contenido" tabindex="-1"> como destino. */
+.publicnav-skip {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: var(--z-modal);
+    padding: 10px 16px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    font-size: 13.5px;
+    font-weight: 600;
+    text-decoration: none;
+}
+.publicnav-skip:focus {
+    left: var(--space-4);
+    top: var(--space-3);
+    box-shadow: 0 0 0 4px var(--signal-wash);
+}
+
+/* ---- Nav pública ----
+   Markup: ver app/views/publicnav.php
+   <header class="publicnav publicnav-sticky">
+     <a class="publicnav-brand" href="/">
+       <span class="publicnav-word">SportAnalysis</span><span class="publicnav-sub">IA</span>
+     </a>
+     <nav class="publicnav-actions" aria-label="Sesión">
+       <a class="publicnav-link" href="login.php">Ingresar</a>
+       <a class="publicnav-cta" href="registro.php">Crear cuenta</a>
+     </nav>
+   </header>
+   El segmento signal de 44×2px sobre la hairline inferior se dibuja con background-image,
+   igual que .appbar, para no gastar un pseudo-elemento. */
+.publicnav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-5);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    background-image: linear-gradient(var(--accent), var(--accent));
+    background-repeat: no-repeat;
+    background-position: var(--space-5) 100%;
+    background-size: 44px 2px;
+}
+
+.publicnav-sticky {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+}
+
+.publicnav-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 21px;
+    letter-spacing: 0.01em;
+    color: var(--text);
+    text-decoration: none;
+}
+
+/* Tick de instrumento antes de la marca — misma firma que .appbar-brand::before. */
+.publicnav-brand::before {
+    content: '';
+    width: 3px;
+    height: 19px;
+    border-radius: 2px;
+    background: var(--accent);
+    flex-shrink: 0;
+}
+
+.publicnav-word {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Chip mono. Texto en --text-muted, no en --accent: sobre wash el acento falla AA. */
+.publicnav-sub {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--signal-wash);
+    line-height: 1.4;
+}
+
+.publicnav-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+}
+
+.publicnav-link,
+.publicnav-cta,
+.publicnav-here {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 38px;
+    padding: 8px 15px;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    font-size: 13.5px;
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: color var(--dur-fast) var(--ease-out),
+                border-color var(--dur-fast) var(--ease-out),
+                background var(--dur-fast) var(--ease-out);
+}
+
+.publicnav-link {
+    color: var(--text-muted);
+}
+.publicnav-link:hover {
+    color: var(--accent-strong);
+    border-color: var(--border);
+    background: var(--signal-wash);
+}
+
+.publicnav-cta {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--paper-raised);
+}
+.publicnav-cta:hover {
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+}
+
+/* Pantalla actual: se muestra, no se enlaza. */
+.publicnav-here {
+    color: var(--text);
+    border-color: var(--border);
+    background: var(--surface-sunken);
+    cursor: default;
+}
+
+.publicnav-link:focus-visible,
+.publicnav-cta:focus-visible {
+    box-shadow: 0 0 0 4px var(--signal-wash);
+}
+
+@media (max-width: 720px) {
+    .publicnav {
+        padding: var(--space-3) var(--space-4);
+        background-position: var(--space-4) 100%;
+    }
+    .publicnav-brand { font-size: 18px; gap: 7px; }
+    .publicnav-brand::before { height: 16px; }
+    .publicnav-sub { display: none; }
+    .publicnav-link,
+    .publicnav-cta,
+    .publicnav-here { padding: 8px 12px; font-size: 12.5px; }
+}
+
+@media (pointer: coarse) {
+    .publicnav-link,
+    .publicnav-cta,
+    .publicnav-here { min-height: 44px; }
+}
+
+/* ---- .field: tipos de input que faltaban ----
+   El selector original de .field solo cubre text / number / select / textarea, así que un
+   formulario de login salía sin estilo. Esta regla es ADITIVA (mismas declaraciones, tipos
+   nuevos): no se tocó la regla original. */
+.field input[type="email"],
+.field input[type="password"],
+.field input[type="tel"],
+.field input[type="search"],
+.field input[type="url"],
+.field input[type="date"] {
+    width: 100%;
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font-ui);
+}
+
+/* Anillo signal de foco para los tipos nuevos. El outline global de base.css se mantiene
+   (es el que garantiza el 3:1 de contraste del indicador); el wash suma el lenguaje del
+   sistema sin reemplazarlo. Alcance acotado a los tipos nuevos para no alterar el aspecto
+   de los formularios del wizard, que ya están validados. */
+.field input[type="email"]:focus-visible,
+.field input[type="password"]:focus-visible,
+.field input[type="tel"]:focus-visible,
+.field input[type="search"]:focus-visible,
+.field input[type="url"]:focus-visible,
+.field input[type="date"]:focus-visible {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--signal-wash);
+}
+
+.field input[type="email"]::placeholder,
+.field input[type="password"]::placeholder,
+.field input[type="tel"]::placeholder {
+    color: var(--text-faint);
+}
+
+/* Autofill de Chrome: sin esto pinta un amarillo fijo que rompe el dark mode. */
+.field input[type="email"]:-webkit-autofill,
+.field input[type="password"]:-webkit-autofill,
+.field input[type="tel"]:-webkit-autofill {
+    -webkit-text-fill-color: var(--text);
+    -webkit-box-shadow: 0 0 0 1000px var(--surface) inset;
+    caret-color: var(--text);
+}
+
+/* ---- Validación por campo ----
+   El error va pegado al campo que lo causa, nunca todo junto arriba del formulario.
+   Markup (server-side o toggleado por JS):
+     <div class="field has-error">
+       <label for="email">Email</label>
+       <input type="email" id="email" aria-invalid="true" aria-describedby="email-err">
+       <p class="field-error" id="email-err" role="alert">Ese email ya tiene cuenta.</p>
+     </div>
+   El <p class="field-error"> se puede renderizar SIEMPRE (vacío queda oculto por :empty y
+   por la regla de .field sin .has-error), así el role="alert" ya existe en el DOM y el
+   lector de pantalla anuncia el texto cuando el JS lo escribe. */
+.field-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--clay);
+}
+
+.field-error:empty,
+.field:not(.has-error) .field-error {
+    display: none;
+}
+
+.field-error::before {
+    content: '!';
+    flex-shrink: 0;
+    width: 15px;
+    height: 15px;
+    margin-top: 1px;
+    border-radius: 50%;
+    background: var(--clay-wash);
+    color: var(--clay);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 15px;
+    text-align: center;
+}
+
+.field.has-error input,
+.field.has-error select,
+.field.has-error textarea {
+    border-color: var(--clay);
+}
+
+.field.has-error input:focus-visible,
+.field.has-error select:focus-visible,
+.field.has-error textarea:focus-visible {
+    border-color: var(--clay);
+    box-shadow: 0 0 0 4px var(--clay-wash);
+}
+
+/* Estado válido confirmado (opcional, solo tras blur con valor correcto). Nunca en verde
+   por defecto: un formulario todo verde al cargar no informa nada. */
+.field.is-valid input,
+.field.is-valid select {
+    border-color: var(--moss);
+}
+
+/* Región de estado del formulario completo (errores de servidor, éxito).
+   Markup: <div class="form-status" role="status" aria-live="polite"></div>
+   y adentro se inyecta un <div class="alert alert-error"> o <div class="alert alert-success">.
+   :empty la colapsa para que no deje un hueco cuando no hay nada que decir. */
+.form-status:empty {
+    display: none;
+}
+
+/* ---- Botón con estado de carga ----
+   Todo submit necesita feedback: loading → success/error. Nunca un click sin respuesta.
+   Markup:
+     <button class="btn btn-swap-label" type="submit">
+       <span class="btn-spinner" aria-hidden="true"></span>
+       <span class="btn-label">Entrar</span>
+       <span class="btn-loading-label">Entrando…</span>
+     </button>
+   El JS agrega .is-loading + aria-busy="true" y bloquea el doble submit por bandera
+   (recomendado sobre `disabled`: deshabilitar el botón enfocado tira el foco al <body>).
+   .btn-loading-label + .btn-swap-label son opcionales: sin ellos el .btn-label queda
+   visible junto al spinner (y el ancho del botón no salta).
+   Bajo prefers-reduced-motion el spinner queda quieto (base.css congela toda animación),
+   por eso el texto "Entrando…" es el que carga el significado, no el giro. */
+.btn-spinner,
+.btn-loading-label {
+    display: none;
+}
+
+.btn.is-loading {
+    pointer-events: none;
+    cursor: progress;
+}
+
+.btn.is-loading:disabled {
+    opacity: 0.72;
+}
+
+.btn.is-loading .btn-spinner {
+    display: inline-block;
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    opacity: 0.85;
+    animation: btn-spin 0.7s linear infinite;
+}
+
+.btn.is-loading .btn-loading-label {
+    display: inline;
+}
+
+/* Si el botón lleva .btn-swap-label, el rótulo de carga REEMPLAZA al normal en vez de
+   sumarse. Es una clase explícita y no un selector :has() para no depender del soporte
+   del navegador ni del orden de los <span>. */
+.btn.is-loading.btn-swap-label .btn-label {
+    display: none;
+}
+
+@keyframes btn-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Botón destructivo (perfil: cerrar sesión de todos lados, eliminar cuenta). */
+.btn-danger {
+    background: var(--clay);
+    border-color: var(--clay);
+    color: var(--paper-raised);
+}
+.btn-danger:hover { filter: brightness(0.92); }
+
+/* ---- Toggle ver/ocultar contraseña ----
+   Markup:
+     <div class="field">
+       <label for="pass">Contraseña</label>
+       <div class="field-password">
+         <input type="password" id="pass" autocomplete="current-password">
+         <button type="button" class="field-password-toggle"
+                 aria-label="Mostrar contraseña" aria-pressed="false">
+           <svg class="icon-eye" ...></svg>
+           <svg class="icon-eye-off" ...></svg>
+         </button>
+       </div>
+     </div>
+   El JS alterna type password/text, la clase .is-revealed en .field-password, el
+   aria-pressed y el aria-label. Iconos: SVG inline (no emoji, sin request externa). */
+.field-password {
+    position: relative;
+    display: block;
+}
+
+.field-password input {
+    padding-right: 44px;
+}
+
+.field-password-toggle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    width: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-faint);
+    transition: color var(--dur-fast) var(--ease-out);
+}
+
+.field-password-toggle:hover {
+    color: var(--accent-strong);
+}
+
+.field-password-toggle:focus-visible {
+    box-shadow: 0 0 0 4px var(--signal-wash);
+}
+
+.field-password-toggle svg {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.6;
+}
+
+.field-password .icon-eye-off { display: none; }
+.field-password.is-revealed .icon-eye { display: none; }
+.field-password.is-revealed .icon-eye-off { display: block; }
+.field-password.is-revealed .field-password-toggle { color: var(--accent-strong); }
+
+@media (pointer: coarse) {
+    .field-password-toggle { width: 46px; }
+    .field-password input { padding-right: 50px; }
+}
+
+/* ---- Shell de auth (login / registro / recuperar contraseña) ----
+   Markup:
+     <main class="auth-shell" id="contenido" tabindex="-1">
+       <section class="auth-card">
+         <p class="auth-eyebrow">Ingresar</p>
+         <h1 class="auth-title">Entrá a tu club</h1>
+         <p class="auth-sub">Tus datasets, vistas y dashboards.</p>
+         <div class="form-status" role="status" aria-live="polite"></div>
+         <form class="auth-form" method="post">…campos .field…
+           <button class="btn auth-submit" type="submit">…</button>
+         </form>
+         <div class="auth-meta"><a href="recuperar.php">Olvidé mi contraseña</a></div>
+         <p class="auth-alt">¿Todavía no tenés cuenta? <a href="registro.php">Creá una</a></p>
+       </section>
+     </main> */
+.auth-shell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 68vh;
+    padding: var(--space-6) var(--space-4) var(--space-7);
+}
+
+.auth-card {
+    position: relative;
+    width: 100%;
+    max-width: 420px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6) var(--space-5) var(--space-5);
+}
+
+/* Segmento signal de 44×2px sobre la hairline superior: misma firma que el appbar. */
+.auth-card::before {
+    content: '';
+    position: absolute;
+    top: -1px;
+    left: var(--space-5);
+    width: 44px;
+    height: 2px;
+    background: var(--accent);
+}
+
+/* Eyebrow mono con tick. Va en --accent-strong sobre superficie plana (≈4.8:1 en claro,
+   ≈10:1 en oscuro): el chip sobre wash del appbar no llega a AA a 10.5px. */
+.auth-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent-strong);
+    margin-bottom: var(--space-3);
+}
+.auth-eyebrow::before {
+    content: '';
+    width: 3px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--accent);
+}
+
+.auth-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 28px;
+    line-height: 1.08;
+    letter-spacing: -0.005em;
+}
+
+.auth-sub {
+    margin-top: var(--space-2);
+    color: var(--text-muted);
+    font-size: 13.5px;
+    max-width: 42ch;
+}
+
+.auth-form {
+    margin-top: var(--space-5);
+}
+
+.auth-submit {
+    width: 100%;
+    justify-content: center;
+    min-height: 44px;
+    padding: 11px 16px;
+    font-size: 14px;
+    margin-top: var(--space-2);
+    transition: background var(--dur-fast) var(--ease-out);
+}
+.auth-submit:hover:not(.is-loading):not(:disabled) {
+    background: var(--accent-strong);
+}
+.auth-submit:focus-visible {
+    box-shadow: 0 0 0 4px var(--signal-wash);
+}
+
+.auth-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-top: var(--space-3);
+    font-size: 12.5px;
+}
+.auth-meta a { color: var(--text-muted); text-decoration: none; }
+.auth-meta a:hover { color: var(--accent-strong); text-decoration: underline; }
+
+.auth-alt {
+    margin-top: var(--space-5);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border);
+    text-align: center;
+    font-size: 13.5px;
+    color: var(--text-muted);
+}
+.auth-alt a { font-weight: 600; text-decoration: none; }
+.auth-alt a:hover { text-decoration: underline; }
+
+.auth-legal {
+    margin-top: var(--space-4);
+    text-align: center;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-faint);
+}
+
+/* Checkbox de "Recordarme" / aceptación de términos. */
+.auth-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin-bottom: var(--space-4);
+    font-size: 13px;
+    color: var(--text-muted);
+}
+.auth-check input {
+    accent-color: var(--accent);
+    width: 15px;
+    height: 15px;
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+/* Medidor de fuerza de contraseña (registro). Markup:
+     <div class="pw-meter" data-level="2">
+       <div class="pw-meter-track"><i></i><i></i><i></i></div>
+       <span class="pw-meter-text">Aceptable</span>
+     </div>
+   El JS solo cambia data-level 0..3 y el texto. */
+.pw-meter {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: 8px;
+}
+.pw-meter-track { display: flex; gap: 4px; flex: 1; }
+.pw-meter-track i {
+    flex: 1;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border);
+    transition: background var(--dur-fast) var(--ease-out);
+}
+.pw-meter[data-level="1"] .pw-meter-track i:nth-child(-n+1) { background: var(--clay); }
+.pw-meter[data-level="2"] .pw-meter-track i:nth-child(-n+2) { background: var(--amber); }
+.pw-meter[data-level="3"] .pw-meter-track i { background: var(--moss); }
+.pw-meter-text {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    flex-shrink: 0;
+}
+
+/* ---- Perfil ----
+   Markup: <div class="page"> + <div class="profile-head"> + tarjetas .card normales.
+     <div class="profile-head">
+       <div class="profile-avatar" aria-hidden="true">AC</div>
+       <div>
+         <h1 class="profile-name">Alejandro Acosta</h1>
+         <p class="profile-meta">alejandro@club.com · alta 12/03/2026</p>
+       </div>
+     </div> */
+.profile-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
+}
+
+.profile-avatar {
+    width: 54px;
+    height: 54px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--signal-wash);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.profile-name {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 24px;
+    line-height: 1.1;
+}
+
+.profile-meta {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-faint);
+    margin-top: 3px;
+}
+
+/* Zona destructiva del perfil: hairline clay, sin relleno rojo (el sistema no grita). */
+.card.is-danger {
+    border-color: var(--clay);
+}
+.card.is-danger .card-title { color: var(--clay); }
+
+@media (max-width: 720px) {
+    .auth-card { padding: var(--space-5) var(--space-4); }
+    .auth-title { font-size: 25px; }
+    .profile-head { gap: var(--space-3); }
+    .profile-avatar { width: 46px; height: 46px; font-size: 16px; }
+    .profile-name { font-size: 21px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .publicnav-link,
+    .publicnav-cta,
+    .auth-submit,
+    .field-password-toggle,
+    .pw-meter-track i { transition: none !important; }
+    .btn.is-loading .btn-spinner { animation: none !important; }
+}
+
+/* ---- Menú de usuario del appbar ----
+   Única adición de este bloque: el desplegable en sí reutiliza .tb-menu-wrap + .widget-menu +
+   .widget-menu-item + .widget-menu-sep tal cual los usa la toolbar de steps/analysis.php, y las
+   iniciales reutilizan el chip mono .appbar-sub. Lo único sin clase previa es la cabecera de
+   identidad del menú (nombre + club + rol), que no es un ítem clickeable y por eso no puede usar
+   .widget-menu-item: heredaría el hover y se leería como acción.
+   Markup: ver app/views/appbar.php */
+.appbar-user-btn { max-width: 260px; }
+
+.appbar-user-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wm-user {
+    padding: 9px 12px 10px;
+}
+
+.wm-user-name {
+    font-weight: 600;
+    font-size: 13.5px;
+    line-height: 1.3;
+    color: var(--text);
+    word-break: break-word;
+}
+
+.wm-user-meta {
+    margin-top: 3px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.35;
+    color: var(--text-faint);
+    word-break: break-word;
+}
+
+@media (max-width: 720px) {
+    /* En mobile el appbar ya va justo de ancho: queda el chip de iniciales, se cae el nombre. */
+    .appbar-user-name { display: none; }
+}
