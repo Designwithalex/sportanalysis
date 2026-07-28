@@ -56,6 +56,41 @@ Responsive hasta mobile, foco de teclado visible, animación con propósito (no 
 
 La IA **nunca genera código, HTML libre, ni gráficos directamente**. Su único output es un **JSON de configuración** que un renderer PHP fijo (ya escrito, testeado) convierte en HTML + inicialización de Chart.js. Aplica tanto a generación inicial de una vista como a cualquier edición asistida por IA posterior.
 
+## Multi-club y aislamiento de datos (crítico)
+
+La app es **multi-tenant por club**. Cada usuario pertenece a un club (`users.club_id`) y **solo ve
+los datos de su club**. GEBA es `clubs.id = 1` y es dueño de todo lo cargado hasta ahora. La tabla
+`clubs` viene precargada con los clubes de la URBA para el dropdown de registro, que es **abierto**.
+
+**Las 10 tablas del dominio tienen `club_id NOT NULL`.** No solo las tres raíz: va en todas, porque
+7 de las 10 se consultan por id de la hija con el id viniendo del cliente. Con `club_id` en todas,
+el aislamiento es una regla mecánica auditable por grep en vez de un razonamiento caso por caso.
+
+El aislamiento se sostiene en **tres capas, y hay que mantener las tres**:
+
+1. **Esquema** — FKs compuestas `(id, club_id)`. Hacen imposible a nivel de base colgar un widget
+   de una vista de otro club. **Tres FKs no pueden ser compuestas** (`dataset_rows.player_id`,
+   `name_reconciliations.suggested_player_id` y `.resolved_player_id`): son `ON DELETE SET NULL` e
+   InnoDB rechaza `SET NULL` si una columna del hijo es `NOT NULL`. Ahí la barrera es **solo el
+   código**, y los JOIN tienen que comparar `club_id` en el `ON`, no únicamente en el `WHERE`.
+2. **`app/Scope.php`** — todo id que llegue del cliente pasa por `Scope::require()` /
+   `requireAll()`. Cortan con **404, nunca 403**: un 403 confirma que el recurso existe.
+3. **`WHERE club_id`** en toda sentencia SQL, y `club_id` **explícito** en todo `INSERT`.
+
+`Auth::clubId()` es estático a propósito: los archivos de `api/` son funciones sueltas
+(`handleSave(PDO $pdo)`) que no ven el scope global.
+
+**Lo que ninguna FK cubre:** `widgets.config` es JSON y contiene `dataset_ids: [...]`. Todo punto
+donde esos ids se lean o lleguen del cliente debe validarlos contra el club. Es el agujero de
+aislamiento más probable del sistema.
+
+Al tocar cualquier query, auditá con:
+```
+rg -n --pcre2 '(FROM|INTO|UPDATE|JOIN)\s+(players|datasets|dataset_rows|name_reconciliations|views|view_datasets|widgets|widget_versions|custom_metrics|view_filters)\b' public_html/
+```
+Cada hit va con `club_id` o con un comentario que justifique la excepción. Y `sql/verify_isolation.sql`
+tiene que dar 0 en todos sus chequeos.
+
 ## Flujo de usuario
 
 ```
@@ -126,7 +161,10 @@ Las **métricas configurables** (fórmula simple entre columnas numéricas del m
 ## Fuera de scope explícito para este MVP
 
 - "Mejorar con IA" a nivel de vista completa (varios widgets a la vez).
-- Multi-club, multi-tenant, roles de usuario.
+- Roles con permisos. El `rol` del usuario es una **etiqueta libre de texto** (preparador físico,
+  entrenador, médico...) que se muestra en el perfil: no gatea ninguna acción. Todos los miembros
+  de un club pueden hacer lo mismo.
+- Recuperación de contraseña por mail (no hay infraestructura de envío en el hosting compartido).
 - Exportar PDF con diseño cuidado (versión básica alcanza).
 - Persistencia de plantel versionado.
 - Métricas derivadas complejas tipo ACWR, o cruces entre datasets distintos en las métricas configurables.
