@@ -1,21 +1,70 @@
 -- PerformanceLab — esquema MySQL/MariaDB
 -- Correr una sola vez contra la base de Hostinger (phpMyAdmin o cliente MySQL).
 -- No se sube a public_html; es solo referencia/setup.
+--
+-- Estado: MULTI-CLUB (equivale a base nueva + migration_2026_07_multiclub_a + _b
+-- ya aplicadas). Una base creada con este archivo NO necesita correr ninguna de
+-- las dos migraciones multiclub; sí conviene correr seed_clubs_urba.sql para
+-- poblar el dropdown de registro.
+--
+-- Regla de oro del modelo: TODA tabla del dominio lleva `club_id` NOT NULL, y las
+-- relaciones entre ellas son FKs COMPUESTAS (fk_col, club_id) -> (id, club_id).
+-- Eso hace estructuralmente imposible que una fila de un club cuelgue de una fila
+-- de otro club, aunque haya un bug en el PHP. Las tres excepciones están marcadas
+-- en su tabla (FKs a players con ON DELETE SET NULL: InnoDB no las admite compuestas).
 
 SET NAMES utf8mb4;
+
+-- ---------------------------------------------------------------------------
+-- clubs — un club = un tenant. Raíz de todo el aislamiento de datos.
+-- El club id = 1 es GEBA (ver seed_clubs_urba.sql).
+-- ---------------------------------------------------------------------------
+CREATE TABLE clubs (
+    id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    nombre        VARCHAR(150) NOT NULL,
+    slug          VARCHAR(120) NOT NULL COMMENT 'identificador estable apto para URL, minúsculas sin tildes',
+    activo        TINYINT(1) NOT NULL DEFAULT 1 COMMENT '0 = no aparece en el dropdown de registro',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_clubs_slug (slug),
+    INDEX idx_clubs_nombre (nombre)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
+-- users — cuentas de acceso. Registro abierto: el usuario elige su club de un
+-- dropdown con los clubes activos. No hay roles con permisos en el MVP.
+-- ---------------------------------------------------------------------------
+CREATE TABLE users (
+    id             INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id        INT UNSIGNED NOT NULL,
+    email          VARCHAR(190) NOT NULL COMMENT '190 chars: cabe en un índice UNIQUE utf8mb4',
+    password_hash  VARCHAR(255) NOT NULL COMMENT 'password_hash() de PHP, nunca texto plano',
+    nombre         VARCHAR(150) NOT NULL,
+    rol            VARCHAR(80) NULL COMMENT 'texto libre descriptivo (preparador físico, head coach, etc.), no controla permisos',
+    status         ENUM('active', 'pending') NOT NULL DEFAULT 'active'
+                   COMMENT 'pending = alta creada pero todavía sin habilitar',
+    created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_login_at  TIMESTAMP NULL,
+    CONSTRAINT fk_users_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    UNIQUE KEY uq_users_email (email),
+    INDEX idx_users_club (club_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
 -- players — plantel (Paso 1). Tabla maestra: todo dato se vincula por nombre.
 -- ---------------------------------------------------------------------------
 CREATE TABLE players (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     nombre        VARCHAR(150) NOT NULL,
     familia       ENUM('back', 'forward') NOT NULL,
     sub_familia   VARCHAR(100) NULL,
     metadata      JSON NULL,
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_players_nombre (nombre)
+    CONSTRAINT fk_players_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    UNIQUE KEY uq_players_id_club (id, club_id) COMMENT 'target de las FKs compuestas de views',
+    INDEX idx_players_nombre (nombre),
+    INDEX idx_players_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
@@ -23,6 +72,7 @@ CREATE TABLE players (
 -- ---------------------------------------------------------------------------
 CREATE TABLE datasets (
     id                  INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id             INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     nombre              VARCHAR(150) NOT NULL,
     categoria           ENUM('partidos', 'entrenamientos', 'fuerza', 'nutricion', 'otros') NOT NULL DEFAULT 'otros'
                         COMMENT 'bucket del Paso Datos: cada partido/sesion se sube como su propio dataset dentro de una categoria',
@@ -31,33 +81,49 @@ CREATE TABLE datasets (
     player_column_name  VARCHAR(150) NULL COMMENT 'columna del CSV identificada como nombre de jugador',
     uploaded_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_datasets_categoria (categoria)
+    CONSTRAINT fk_datasets_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    UNIQUE KEY uq_datasets_id_club (id, club_id) COMMENT 'target de las FKs compuestas de las tablas hijas',
+    INDEX idx_datasets_categoria (categoria),
+    INDEX idx_datasets_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
 -- dataset_rows — filas crudas de cada dataset, sin transformar.
+--
+-- EXCEPCIÓN AL PATRÓN: `fk_dataset_rows_player` queda como FK SIMPLE. InnoDB no
+-- admite ON DELETE SET NULL si alguna columna del lado hijo es NOT NULL (tendría
+-- que nulificar club_id), así que no puede ser compuesta. El scoping por club de
+-- player_id lo garantiza la aplicación; verify_isolation.sql lo audita (chequeo A02).
 -- ---------------------------------------------------------------------------
 CREATE TABLE dataset_rows (
     id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     dataset_id    INT UNSIGNED NOT NULL,
     player_id     INT UNSIGNED NULL,
     raw_name      VARCHAR(150) NULL COMMENT 'valor tal cual apareció en la columna de nombre del CSV',
     raw_data      JSON NOT NULL COMMENT 'fila completa como fue subida',
     match_status  ENUM('matched', 'unmatched', 'discarded') NOT NULL DEFAULT 'unmatched',
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_dataset_rows_dataset FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
+    CONSTRAINT fk_dataset_rows_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    CONSTRAINT fk_dataset_rows_dataset_club FOREIGN KEY (dataset_id, club_id) REFERENCES datasets(id, club_id) ON DELETE CASCADE,
     CONSTRAINT fk_dataset_rows_player FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE SET NULL,
     INDEX idx_dataset_rows_dataset (dataset_id),
+    INDEX idx_dataset_rows_dataset_club (dataset_id, club_id),
     INDEX idx_dataset_rows_player (player_id),
-    INDEX idx_dataset_rows_match_status (match_status)
+    INDEX idx_dataset_rows_match_status (match_status),
+    INDEX idx_dataset_rows_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
 -- name_reconciliations — checkpoint del Paso 3.7, una fila por nombre sin matchear.
 -- Se resuelve una vez por dataset (no por vista).
+--
+-- EXCEPCIÓN AL PATRÓN: las dos FKs a players son SIMPLES por el mismo motivo que
+-- en dataset_rows (ON DELETE SET NULL). Auditadas en verify_isolation.sql (A04/A05).
 -- ---------------------------------------------------------------------------
 CREATE TABLE name_reconciliations (
     id                    INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id               INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     dataset_id            INT UNSIGNED NOT NULL,
     raw_name              VARCHAR(150) NOT NULL,
     suggested_player_id   INT UNSIGNED NULL COMMENT 'mejor candidato por fuzzy match, nunca se aplica solo',
@@ -65,18 +131,25 @@ CREATE TABLE name_reconciliations (
     resolved_player_id    INT UNSIGNED NULL COMMENT 'jugador finalmente asignado, sea por confirmacion o eleccion manual',
     created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     resolved_at           TIMESTAMP NULL,
-    CONSTRAINT fk_reconciliations_dataset FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
+    CONSTRAINT fk_reconciliations_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    CONSTRAINT fk_reconciliations_dataset_club FOREIGN KEY (dataset_id, club_id) REFERENCES datasets(id, club_id) ON DELETE CASCADE,
     CONSTRAINT fk_reconciliations_suggested FOREIGN KEY (suggested_player_id) REFERENCES players(id) ON DELETE SET NULL,
     CONSTRAINT fk_reconciliations_resolved FOREIGN KEY (resolved_player_id) REFERENCES players(id) ON DELETE SET NULL,
     INDEX idx_reconciliations_dataset (dataset_id),
-    INDEX idx_reconciliations_resolution (resolution)
+    INDEX idx_reconciliations_dataset_club (dataset_id, club_id),
+    INDEX idx_reconciliations_resolution (resolution),
+    INDEX idx_reconciliations_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
 -- views — vistas creadas en el Paso 3 (nombre + descripción en lenguaje natural).
+-- `player_id` es NULLable (sólo lo usan las vistas tipo 'player'). Con semántica
+-- MATCH SIMPLE de InnoDB, la FK compuesta no se evalúa cuando player_id es NULL,
+-- así que las vistas manual/cluster se insertan sin restricción extra.
 -- ---------------------------------------------------------------------------
 CREATE TABLE views (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     nombre        VARCHAR(150) NOT NULL,
     tipo          ENUM('manual', 'cluster', 'player') NOT NULL DEFAULT 'manual'
                   COMMENT 'manual = creada a mano; cluster = vista base de una categoria de datos; player = overview de un jugador',
@@ -87,36 +160,55 @@ CREATE TABLE views (
     description   TEXT NOT NULL COMMENT 'prompt original del usuario / intent de generacion',
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    CONSTRAINT fk_views_player FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE,
+    CONSTRAINT fk_views_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    CONSTRAINT fk_views_player_club FOREIGN KEY (player_id, club_id) REFERENCES players(id, club_id) ON DELETE CASCADE,
+    UNIQUE KEY uq_views_id_club (id, club_id) COMMENT 'target de las FKs compuestas de las tablas hijas',
     INDEX idx_views_tipo (tipo),
-    INDEX idx_views_position (position)
+    INDEX idx_views_position (position),
+    INDEX idx_views_player_club (player_id, club_id),
+    INDEX idx_views_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
 -- view_datasets — qué datasets aplican a cada vista (checkboxes del Paso 3).
+-- Doble FK compuesta: la vista y el dataset tienen que ser del mismo club.
 -- ---------------------------------------------------------------------------
 CREATE TABLE view_datasets (
     view_id       INT UNSIGNED NOT NULL,
     dataset_id    INT UNSIGNED NOT NULL,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     PRIMARY KEY (view_id, dataset_id),
-    CONSTRAINT fk_view_datasets_view FOREIGN KEY (view_id) REFERENCES views(id) ON DELETE CASCADE,
-    CONSTRAINT fk_view_datasets_dataset FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
-    INDEX idx_view_datasets_dataset (dataset_id)
+    CONSTRAINT fk_view_datasets_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    CONSTRAINT fk_view_datasets_view_club FOREIGN KEY (view_id, club_id) REFERENCES views(id, club_id) ON DELETE CASCADE,
+    CONSTRAINT fk_view_datasets_dataset_club FOREIGN KEY (dataset_id, club_id) REFERENCES datasets(id, club_id) ON DELETE CASCADE,
+    INDEX idx_view_datasets_dataset (dataset_id),
+    INDEX idx_view_datasets_view_club (view_id, club_id),
+    INDEX idx_view_datasets_dataset_club (dataset_id, club_id),
+    INDEX idx_view_datasets_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
 -- widgets — grilla del Paso 4. type limitado a la libreria fija del brief.
+--
+-- OJO: los datasets que consume un widget viven dentro de `config` (JSON), fuera
+-- del alcance de cualquier FK. El scoping por club de esos ids es responsabilidad
+-- de la aplicación; verify_isolation.sql lo audita (chequeo D01).
 -- ---------------------------------------------------------------------------
 CREATE TABLE widgets (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     view_id       INT UNSIGNED NOT NULL,
     type          ENUM('kpi_card', 'table', 'line_chart', 'bar_chart', 'stacked_bar') NOT NULL,
     config        JSON NOT NULL COMMENT 'unica fuente de verdad que el WidgetRenderer convierte a HTML + Chart.js. Incluye dataset_ids: [..] (uno o varios datasets para cruzar partidos); se acepta el viejo dataset_id por retrocompat',
     position      INT UNSIGNED NOT NULL DEFAULT 0,
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    CONSTRAINT fk_widgets_view FOREIGN KEY (view_id) REFERENCES views(id) ON DELETE CASCADE,
-    INDEX idx_widgets_view (view_id)
+    CONSTRAINT fk_widgets_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    CONSTRAINT fk_widgets_view_club FOREIGN KEY (view_id, club_id) REFERENCES views(id, club_id) ON DELETE CASCADE,
+    UNIQUE KEY uq_widgets_id_club (id, club_id) COMMENT 'target de la FK compuesta de widget_versions',
+    INDEX idx_widgets_view (view_id),
+    INDEX idx_widgets_view_club (view_id, club_id),
+    INDEX idx_widgets_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
@@ -124,12 +216,16 @@ CREATE TABLE widgets (
 -- ---------------------------------------------------------------------------
 CREATE TABLE widget_versions (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     widget_id     INT UNSIGNED NOT NULL,
     config        JSON NOT NULL,
     source        ENUM('initial', 'manual', 'ai') NOT NULL,
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_widget_versions_widget FOREIGN KEY (widget_id) REFERENCES widgets(id) ON DELETE CASCADE,
-    INDEX idx_widget_versions_widget (widget_id, created_at)
+    CONSTRAINT fk_widget_versions_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    CONSTRAINT fk_widget_versions_widget_club FOREIGN KEY (widget_id, club_id) REFERENCES widgets(id, club_id) ON DELETE CASCADE,
+    INDEX idx_widget_versions_widget (widget_id, created_at),
+    INDEX idx_widget_versions_widget_club (widget_id, club_id),
+    INDEX idx_widget_versions_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
@@ -138,29 +234,41 @@ CREATE TABLE widget_versions (
 -- ---------------------------------------------------------------------------
 CREATE TABLE custom_metrics (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     view_id       INT UNSIGNED NOT NULL,
     dataset_id    INT UNSIGNED NOT NULL,
     nombre        VARCHAR(150) NOT NULL,
     formula       JSON NOT NULL COMMENT '{ operacion, columnas: [...] }',
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_custom_metrics_view FOREIGN KEY (view_id) REFERENCES views(id) ON DELETE CASCADE,
-    CONSTRAINT fk_custom_metrics_dataset FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
+    CONSTRAINT fk_custom_metrics_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    CONSTRAINT fk_custom_metrics_view_club FOREIGN KEY (view_id, club_id) REFERENCES views(id, club_id) ON DELETE CASCADE,
+    CONSTRAINT fk_custom_metrics_dataset_club FOREIGN KEY (dataset_id, club_id) REFERENCES datasets(id, club_id) ON DELETE CASCADE,
     INDEX idx_custom_metrics_view (view_id),
-    INDEX idx_custom_metrics_dataset (dataset_id)
+    INDEX idx_custom_metrics_dataset (dataset_id),
+    INDEX idx_custom_metrics_view_club (view_id, club_id),
+    INDEX idx_custom_metrics_dataset_club (dataset_id, club_id),
+    INDEX idx_custom_metrics_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
 -- view_filters — filtros a nivel vista+dataset, disponibles para sus widgets.
+-- `dataset_id` NULL = filtro global de la vista; con MATCH SIMPLE esas filas no
+-- evalúan la FK compuesta a datasets, que es exactamente lo que se busca.
 -- ---------------------------------------------------------------------------
 CREATE TABLE view_filters (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     view_id       INT UNSIGNED NOT NULL,
     dataset_id    INT UNSIGNED NULL COMMENT 'NULL = filtro global de la vista sobre una dimension universal (familia/sub_familia/jugador), aplica a TODOS los widgets sin importar su dataset',
     column_name   VARCHAR(150) NOT NULL,
     filter_type   VARCHAR(50) NOT NULL COMMENT 'rango, valores, fecha, etc.',
     config        JSON NULL COMMENT 'parametros propios del filtro (min/max, opciones, etc.)',
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_view_filters_view FOREIGN KEY (view_id) REFERENCES views(id) ON DELETE CASCADE,
-    CONSTRAINT fk_view_filters_dataset FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
-    INDEX idx_view_filters_view (view_id)
+    CONSTRAINT fk_view_filters_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    CONSTRAINT fk_view_filters_view_club FOREIGN KEY (view_id, club_id) REFERENCES views(id, club_id) ON DELETE CASCADE,
+    CONSTRAINT fk_view_filters_dataset_club FOREIGN KEY (dataset_id, club_id) REFERENCES datasets(id, club_id) ON DELETE CASCADE,
+    INDEX idx_view_filters_view (view_id),
+    INDEX idx_view_filters_view_club (view_id, club_id),
+    INDEX idx_view_filters_dataset_club (dataset_id, club_id),
+    INDEX idx_view_filters_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
