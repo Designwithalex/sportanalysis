@@ -4,6 +4,7 @@ require_once __DIR__ . '/AnthropicClient.php';
 require_once __DIR__ . '/WidgetSchema.php';
 require_once __DIR__ . '/WidgetRenderer.php';
 require_once __DIR__ . '/Database.php';
+require_once __DIR__ . '/Auth.php';
 
 /**
  * Genera "vistas base" sugeridas por IA a partir de los datos ya cargados, sin que el PF tenga que
@@ -18,6 +19,14 @@ require_once __DIR__ . '/Database.php';
  *
  * Igual que el resto del producto, la IA solo devuelve JSON declarativo: cada widget se valida contra
  * WidgetSchema antes de persistir. Nunca genera HTML ni código.
+ *
+ * AISLAMIENTO POR CLUB (crítico en esta clase). upsertView() es idempotente: busca una vista base
+ * existente por tipo+categoría (o tipo+jugador) y, si la encuentra, BORRA su contenido antes de
+ * repoblarla. Sin `club_id` en ese SELECT, generar la vista base de una categoría podía encontrar
+ * la vista de OTRO club y borrarle widgets, datasets y filtros — una escritura destructiva
+ * cross-club disparada por un botón normal de la UI. Por eso todas las sentencias de acá, sin
+ * excepción, llevan club_id: los SELECT/UPDATE/DELETE en el WHERE y los INSERT como valor
+ * explícito (el `DEFAULT 1` del esquema no protege, oculta).
  */
 class BaseViewGenerator
 {
@@ -36,12 +45,25 @@ class BaseViewGenerator
         $this->pdo = $pdo;
     }
 
+    /** Club de la sesión. Falla fuerte si no hay: sin club no hay consulta segura. */
+    private function clubId(): int
+    {
+        $clubId = Auth::clubId();
+        if ($clubId <= 0) {
+            throw new RuntimeException('Sesión sin club: no se pueden generar vistas base.');
+        }
+        return $clubId;
+    }
+
     /** @return array<string,string> categoria => label, solo las categorías que tienen datasets. */
     public function nonEmptyClusters(): array
     {
-        $counts = $this->pdo->query(
-            'SELECT categoria, COUNT(*) AS c FROM datasets GROUP BY categoria'
-        )->fetchAll(PDO::FETCH_KEY_PAIR);
+        // query() no admite parámetros: prepare() para poder acotar por club.
+        $stmt = $this->pdo->prepare(
+            'SELECT categoria, COUNT(*) AS c FROM datasets WHERE club_id = :club GROUP BY categoria'
+        );
+        $stmt->execute(['club' => $this->clubId()]);
+        $counts = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
 
         $out = [];
         foreach (self::CATEGORIA_LABELS as $key => $label) {
@@ -179,7 +201,13 @@ PROMPT;
         if (empty($templateWidgets)) {
             throw new RuntimeException('No hay widgets plantilla para instanciar.');
         }
-        $players = $this->pdo->query('SELECT id, nombre FROM players ORDER BY nombre')->fetchAll();
+        // Sin el filtro por club esto generaba un "Overview — <nombre>" por cada jugador de la
+        // base entera: cientos de tabs con los nombres del plantel de los demás clubes.
+        $playersStmt = $this->pdo->prepare(
+            'SELECT id, nombre FROM players WHERE club_id = :club ORDER BY nombre'
+        );
+        $playersStmt->execute(['club' => $this->clubId()]);
+        $players = $playersStmt->fetchAll();
         if (empty($players)) {
             throw new RuntimeException('No hay jugadores en el plantel.');
         }
@@ -223,30 +251,49 @@ PROMPT;
      */
     private function upsertView(string $tipo, string $nombre, array $key, string $intent, array $datasetIds, array $widgets, ?array $globalFilter = null): int
     {
+        $clubId = $this->clubId();
+
         $this->pdo->beginTransaction();
         try {
             // ¿existe ya una vista base para esta clave? → la reusamos y limpiamos su contenido.
+            // El `AND club_id` no es opcional: lo que sale de acá es el target de los tres DELETE
+            // de abajo. Sin él, con dos clubes con datasets en la misma categoría, el LIMIT 1
+            // podía devolver la vista del OTRO club y borrarle todo el contenido.
             if (isset($key['categoria'])) {
-                $sel = $this->pdo->prepare('SELECT id FROM views WHERE tipo = "cluster" AND categoria = ? LIMIT 1');
-                $sel->execute([$key['categoria']]);
+                $sel = $this->pdo->prepare(
+                    'SELECT id FROM views WHERE tipo = "cluster" AND categoria = ? AND club_id = ? LIMIT 1'
+                );
+                $sel->execute([$key['categoria'], $clubId]);
             } else {
-                $sel = $this->pdo->prepare('SELECT id FROM views WHERE tipo = "player" AND player_id = ? LIMIT 1');
-                $sel->execute([$key['player_id']]);
+                $sel = $this->pdo->prepare(
+                    'SELECT id FROM views WHERE tipo = "player" AND player_id = ? AND club_id = ? LIMIT 1'
+                );
+                $sel->execute([$key['player_id'], $clubId]);
             }
             $viewId = (int) ($sel->fetchColumn() ?: 0);
 
             if ($viewId > 0) {
-                $this->pdo->prepare('UPDATE views SET nombre = ?, description = ? WHERE id = ?')
-                    ->execute([$nombre, $intent, $viewId]);
+                $this->pdo->prepare('UPDATE views SET nombre = ?, description = ? WHERE id = ? AND club_id = ?')
+                    ->execute([$nombre, $intent, $viewId, $clubId]);
                 // Limpiamos contenido previo (widgets → cascada a versiones; datasets y filtros).
-                $this->pdo->prepare('DELETE FROM widgets WHERE view_id = ?')->execute([$viewId]);
-                $this->pdo->prepare('DELETE FROM view_datasets WHERE view_id = ?')->execute([$viewId]);
-                $this->pdo->prepare('DELETE FROM view_filters WHERE view_id = ?')->execute([$viewId]);
+                // Los tres repiten club_id aunque el $viewId ya salga acotado: son las sentencias
+                // destructivas del sistema y no dependen de que el SELECT de arriba siga bien.
+                $this->pdo->prepare('DELETE FROM widgets WHERE view_id = ? AND club_id = ?')->execute([$viewId, $clubId]);
+                $this->pdo->prepare('DELETE FROM view_datasets WHERE view_id = ? AND club_id = ?')->execute([$viewId, $clubId]);
+                $this->pdo->prepare('DELETE FROM view_filters WHERE view_id = ? AND club_id = ?')->execute([$viewId, $clubId]);
             } else {
-                $pos = (int) $this->pdo->query('SELECT COALESCE(MAX(position), -1) + 1 FROM views')->fetchColumn();
+                // La posición es por club: contar sobre todas las vistas de la base dejaría las
+                // tabs nuevas arrancando en posiciones absurdas.
+                $posStmt = $this->pdo->prepare(
+                    'SELECT COALESCE(MAX(position), -1) + 1 FROM views WHERE club_id = ?'
+                );
+                $posStmt->execute([$clubId]);
+                $pos = (int) $posStmt->fetchColumn();
                 $this->pdo->prepare(
-                    'INSERT INTO views (nombre, tipo, categoria, player_id, description, position) VALUES (?, ?, ?, ?, ?, ?)'
+                    'INSERT INTO views (club_id, nombre, tipo, categoria, player_id, description, position)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)'
                 )->execute([
+                    $clubId,
                     $nombre,
                     $tipo,
                     $key['categoria'] ?? null,
@@ -257,24 +304,26 @@ PROMPT;
                 $viewId = (int) $this->pdo->lastInsertId();
             }
 
-            $vdStmt = $this->pdo->prepare('INSERT INTO view_datasets (view_id, dataset_id) VALUES (?, ?)');
+            $vdStmt = $this->pdo->prepare('INSERT INTO view_datasets (club_id, view_id, dataset_id) VALUES (?, ?, ?)');
             foreach (array_unique(array_map('intval', $datasetIds)) as $did) {
-                $vdStmt->execute([$viewId, $did]);
+                $vdStmt->execute([$clubId, $viewId, $did]);
             }
 
-            $wStmt = $this->pdo->prepare('INSERT INTO widgets (view_id, type, config, position) VALUES (?, ?, ?, ?)');
-            $vStmt = $this->pdo->prepare('INSERT INTO widget_versions (widget_id, config, source) VALUES (?, ?, "initial")');
+            $wStmt = $this->pdo->prepare('INSERT INTO widgets (club_id, view_id, type, config, position) VALUES (?, ?, ?, ?, ?)');
+            $vStmt = $this->pdo->prepare('INSERT INTO widget_versions (club_id, widget_id, config, source) VALUES (?, ?, ?, "initial")');
             $position = 0;
             foreach ($widgets as $w) {
                 $encoded = json_encode($w['config'], JSON_UNESCAPED_UNICODE);
-                $wStmt->execute([$viewId, $w['type'], $encoded, $position++]);
-                $vStmt->execute([(int) $this->pdo->lastInsertId(), $encoded]);
+                $wStmt->execute([$clubId, $viewId, $w['type'], $encoded, $position++]);
+                $vStmt->execute([$clubId, (int) $this->pdo->lastInsertId(), $encoded]);
             }
 
             if ($globalFilter !== null) {
                 $this->pdo->prepare(
-                    'INSERT INTO view_filters (view_id, dataset_id, column_name, filter_type, config) VALUES (?, NULL, ?, "valores", ?)'
+                    'INSERT INTO view_filters (club_id, view_id, dataset_id, column_name, filter_type, config)
+                     VALUES (?, ?, NULL, ?, "valores", ?)'
                 )->execute([
+                    $clubId,
                     $viewId,
                     $globalFilter['column'],
                     json_encode(['operator' => 'eq', 'value' => $globalFilter['value']], JSON_UNESCAPED_UNICODE),
@@ -350,8 +399,10 @@ PROMPT;
     private function effectiveSchemaFor(array $datasetIds): array
     {
         $placeholders = implode(',', array_fill(0, count($datasetIds), '?'));
-        $stmt = $this->pdo->prepare("SELECT column_schema FROM datasets WHERE id IN ($placeholders)");
-        $stmt->execute($datasetIds);
+        $stmt = $this->pdo->prepare(
+            "SELECT column_schema FROM datasets WHERE id IN ($placeholders) AND club_id = ?"
+        );
+        $stmt->execute([...$datasetIds, $this->clubId()]);
         $schemas = array_map(fn($json) => json_decode($json, true), $stmt->fetchAll(PDO::FETCH_COLUMN));
         return WidgetSchema::effectiveSchema($schemas);
     }
@@ -365,10 +416,14 @@ PROMPT;
      */
     private function fetchDatasets(string $where, array $params): array
     {
+        // $where lo arman los métodos de esta clase (nunca la request) y siempre usa placeholders.
+        // El club_id se agrega acá, no en el $where, para que ningún llamador pueda olvidárselo:
+        // este es el único punto por el que los datasets entran a los prompts de la IA.
         $stmt = $this->pdo->prepare(
-            "SELECT id, nombre, categoria, column_schema FROM datasets WHERE $where ORDER BY categoria, uploaded_at"
+            "SELECT id, nombre, categoria, column_schema FROM datasets
+             WHERE ($where) AND club_id = ? ORDER BY categoria, uploaded_at"
         );
-        $stmt->execute($params);
+        $stmt->execute([...array_values($params), $this->clubId()]);
         $datasets = $stmt->fetchAll();
         foreach ($datasets as &$d) {
             $d['id'] = (int) $d['id'];
@@ -386,9 +441,10 @@ PROMPT;
     private function emptyColumns(int $datasetId, array $columnSchema): array
     {
         $stmt = $this->pdo->prepare(
-            "SELECT raw_data FROM dataset_rows WHERE dataset_id = :id AND match_status = 'matched' LIMIT 300"
+            "SELECT raw_data FROM dataset_rows
+             WHERE dataset_id = :id AND club_id = :club AND match_status = 'matched' LIMIT 300"
         );
-        $stmt->execute(['id' => $datasetId]);
+        $stmt->execute(['id' => $datasetId, 'club' => $this->clubId()]);
         $rows = array_map(fn($r) => json_decode($r, true) ?: [], $stmt->fetchAll(PDO::FETCH_COLUMN));
         if (empty($rows)) {
             return [];

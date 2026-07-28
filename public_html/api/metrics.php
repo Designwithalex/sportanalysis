@@ -1,18 +1,24 @@
 <?php
 
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_api.php';
 
-header('Content-Type: application/json; charset=utf-8');
+// Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
+// Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
+requireAuth();
 
 $method = $_SERVER['REQUEST_METHOD'];
 $pdo = Database::get();
 
+requireMethod(['GET', 'POST', 'DELETE']);
+
 if ($method === 'GET') {
     $viewId = (int) ($_GET['view_id'] ?? 0);
-    $stmt = $pdo->prepare('SELECT id, dataset_id, nombre, formula FROM custom_metrics WHERE view_id = :view_id');
-    $stmt->execute(['view_id' => $viewId]);
+    // Sin view_id devolvía lista vacía; se mantiene tal cual para no cambiar el comportamiento.
+    if ($viewId > 0) {
+        Scope::require($pdo, 'views', $viewId);
+    }
+    $stmt = $pdo->prepare('SELECT id, dataset_id, nombre, formula FROM custom_metrics WHERE view_id = :view_id AND club_id = :club');
+    $stmt->execute(['view_id' => $viewId, 'club' => Auth::clubId()]);
     $metrics = $stmt->fetchAll();
     foreach ($metrics as &$m) {
         $m['formula'] = json_decode($m['formula'], true);
@@ -41,12 +47,11 @@ if ($method === 'POST') {
         respondError(422, 'Esa operación necesita exactamente 2 columnas.');
     }
 
-    $datasetStmt = $pdo->prepare('SELECT column_schema FROM datasets WHERE id = :id');
-    $datasetStmt->execute(['id' => $datasetId]);
-    $dataset = $datasetStmt->fetch();
-    if (!$dataset) {
-        respondError(404, 'Dataset no encontrado.');
-    }
+    // view_id y dataset_id vienen del cliente y viajan al INSERT de abajo (sin WHERE que los filtre):
+    // sin validar, se podía crear una métrica dentro de la vista de otro club, o sobre su dataset.
+    Scope::require($pdo, 'views', $viewId);
+    $dataset = Scope::require($pdo, 'datasets', $datasetId);
+
     $schema = json_decode($dataset['column_schema'], true);
     foreach ($columns as $col) {
         if (($schema[$col] ?? null) !== 'numerica') {
@@ -57,9 +62,9 @@ if ($method === 'POST') {
     $formula = json_encode(['operation' => $operation, 'columns' => array_values($columns)], JSON_UNESCAPED_UNICODE);
 
     $stmt = $pdo->prepare(
-        'INSERT INTO custom_metrics (view_id, dataset_id, nombre, formula) VALUES (:view_id, :dataset_id, :nombre, :formula)'
+        'INSERT INTO custom_metrics (club_id, view_id, dataset_id, nombre, formula) VALUES (:club, :view_id, :dataset_id, :nombre, :formula)'
     );
-    $stmt->execute(['view_id' => $viewId, 'dataset_id' => $datasetId, 'nombre' => $nombre, 'formula' => $formula]);
+    $stmt->execute(['club' => Auth::clubId(), 'view_id' => $viewId, 'dataset_id' => $datasetId, 'nombre' => $nombre, 'formula' => $formula]);
 
     echo json_encode(['ok' => true, 'id' => (int) $pdo->lastInsertId()]);
     exit;
@@ -70,17 +75,10 @@ if ($method === 'DELETE') {
     if ($id <= 0) {
         respondError(400, 'Falta id.');
     }
-    $pdo->prepare('DELETE FROM custom_metrics WHERE id = :id')->execute(['id' => $id]);
+    // Cadena custom_metrics → views. El id llega del cliente: 404 si la métrica es de otro club.
+    Scope::require($pdo, 'custom_metrics', $id);
+    $pdo->prepare('DELETE FROM custom_metrics WHERE id = :id AND club_id = :club')
+        ->execute(['id' => $id, 'club' => Auth::clubId()]);
     echo json_encode(['ok' => true]);
-    exit;
-}
-
-http_response_code(405);
-echo json_encode(['ok' => false, 'error' => 'Método no permitido.']);
-
-function respondError(int $status, string $message): void
-{
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $message]);
     exit;
 }

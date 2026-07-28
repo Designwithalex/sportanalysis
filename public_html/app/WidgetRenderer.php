@@ -1,8 +1,14 @@
 <?php
 
+require_once __DIR__ . '/Auth.php';
+
 /**
  * Unico lugar que convierte config JSON (generado por IA o por el editor manual) en
  * HTML + datos para Chart.js. Ni la IA ni el editor tocan HTML directamente.
+ *
+ * AISLAMIENTO POR CLUB: toda lectura de datos lleva `club_id` de la sesión en el WHERE.
+ * Los datasets que consume un widget viven dentro de `config` (JSON), fuera del alcance de
+ * cualquier FK, así que antes de leer nada se valida que TODOS pertenezcan al club.
  */
 class WidgetRenderer
 {
@@ -11,6 +17,19 @@ class WidgetRenderer
     public function __construct(PDO $pdo)
     {
         $this->pdo = $pdo;
+    }
+
+    /**
+     * Club de la sesión. Falla fuerte si no hay: sin club no hay forma segura de acotar
+     * las consultas, y devolver 0 filtraría por un club inexistente en silencio.
+     */
+    private function clubId(): int
+    {
+        $clubId = Auth::clubId();
+        if ($clubId <= 0) {
+            throw new RuntimeException('Sesión sin club: no se pueden renderizar widgets.');
+        }
+        return $clubId;
     }
 
     /**
@@ -23,6 +42,19 @@ class WidgetRenderer
         $type = $widget['type'];
         $config = $widget['config'];
         $datasetIds = self::datasetIds($config);
+
+        // `config` es JSON: ninguna FK cubre dataset_ids. Si alguno no es del club, no alcanza
+        // con que el WHERE no traiga filas (se vería como un widget vacío, no como un error):
+        // se corta acá y se avisa.
+        if (!empty($datasetIds) && !$this->allDatasetsOwned($datasetIds)) {
+            return [
+                'html' => '<div class="alert alert-error">Este widget apunta a datos que no pertenecen a este club.</div>',
+                'chart_type' => null,
+                'chart_data' => null,
+                'excluded_count' => 0,
+                'scale_base' => null,
+            ];
+        }
 
         [$rows, $excludedCount] = $this->loadRows($datasetIds);
         $customMetrics = $this->loadCustomMetricsById($datasetIds);
@@ -75,6 +107,22 @@ class WidgetRenderer
     }
 
     /**
+     * ¿Todos los dataset_ids de la config son del club de la sesión?
+     * Falla en bloque a propósito: con uno solo ajeno, no se renderiza nada.
+     * @param int[] $datasetIds
+     */
+    private function allDatasetsOwned(array $datasetIds): bool
+    {
+        $placeholders = implode(',', array_fill(0, count($datasetIds), '?'));
+        $stmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM datasets WHERE id IN ($placeholders) AND club_id = ?"
+        );
+        $stmt->execute([...$datasetIds, $this->clubId()]);
+
+        return (int) $stmt->fetchColumn() === count($datasetIds);
+    }
+
+    /**
      * Carga las filas matcheadas de uno o varios datasets, inyectando columnas sintéticas.
      * __dataset (nombre del dataset de origen) es la que permite "cruzar partidos": al abarcar
      * varios datasets, agrupar por __dataset = agrupar por partido/sesión.
@@ -87,16 +135,20 @@ class WidgetRenderer
             return [[], 0];
         }
         $placeholders = implode(',', array_fill(0, count($datasetIds), '?'));
+        $clubId = $this->clubId();
 
+        // Los JOIN repiten club_id además del WHERE: la FK a players es SIMPLE (ON DELETE SET
+        // NULL no admite FK compuesta), así que a nivel base nada impide que un player_id
+        // apunte a otro club. El JOIN es lo único que lo corta.
         $stmt = $this->pdo->prepare(
             "SELECT r.raw_data, r.player_id, d.nombre AS dataset_nombre,
                     p.nombre AS player_nombre, p.familia, p.sub_familia
              FROM dataset_rows r
-             INNER JOIN datasets d ON d.id = r.dataset_id
-             LEFT JOIN players p ON p.id = r.player_id
-             WHERE r.dataset_id IN ($placeholders) AND r.match_status = 'matched'"
+             INNER JOIN datasets d ON d.id = r.dataset_id AND d.club_id = r.club_id
+             LEFT JOIN players p ON p.id = r.player_id AND p.club_id = r.club_id
+             WHERE r.dataset_id IN ($placeholders) AND r.club_id = ? AND r.match_status = 'matched'"
         );
-        $stmt->execute($datasetIds);
+        $stmt->execute([...$datasetIds, $clubId]);
         $rows = [];
         foreach ($stmt->fetchAll() as $row) {
             $data = json_decode($row['raw_data'], true) ?? [];
@@ -109,9 +161,10 @@ class WidgetRenderer
         }
 
         $excludedStmt = $this->pdo->prepare(
-            "SELECT COUNT(*) FROM dataset_rows WHERE dataset_id IN ($placeholders) AND match_status != 'matched'"
+            "SELECT COUNT(*) FROM dataset_rows
+             WHERE dataset_id IN ($placeholders) AND club_id = ? AND match_status != 'matched'"
         );
-        $excludedStmt->execute($datasetIds);
+        $excludedStmt->execute([...$datasetIds, $clubId]);
         $excluded = (int) $excludedStmt->fetchColumn();
 
         return [$rows, $excluded];
@@ -127,8 +180,10 @@ class WidgetRenderer
             return [];
         }
         $placeholders = implode(',', array_fill(0, count($datasetIds), '?'));
-        $stmt = $this->pdo->prepare("SELECT id, formula FROM custom_metrics WHERE dataset_id IN ($placeholders)");
-        $stmt->execute($datasetIds);
+        $stmt = $this->pdo->prepare(
+            "SELECT id, formula FROM custom_metrics WHERE dataset_id IN ($placeholders) AND club_id = ?"
+        );
+        $stmt->execute([...$datasetIds, $this->clubId()]);
         $byId = [];
         foreach ($stmt->fetchAll() as $m) {
             $byId[(int) $m['id']] = json_decode($m['formula'], true);

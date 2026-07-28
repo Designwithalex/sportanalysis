@@ -1,22 +1,23 @@
 <?php
 
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_api.php';
 require __DIR__ . '/../app/BaseViewGenerator.php';
+
+// Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
+// Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
+requireAuth();
 
 // Generar vistas base implica llamadas largas a la IA (~30-60s cada una) más reintentos con backoff.
 // Subimos el límite de ejecución para que no corte a mitad de camino (Hostinger suele permitirlo).
 @set_time_limit(180);
 @ignore_user_abort(true);
 
-header('Content-Type: application/json; charset=utf-8');
+requireMethod('POST');
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    echo json_encode(['ok' => false, 'error' => 'Método no permitido.']);
-    exit;
-}
+// PHP mantiene un lock exclusivo sobre el archivo de sesión mientras está abierta, lo que serializa
+// todas las requests del mismo usuario. Con una llamada a la IA de ~60s por delante, eso congelaría
+// la app entera. Cerramos la sesión para escritura acá; a partir de este punto no se toca $_SESSION.
+session_write_close();
 
 $pdo = Database::get();
 $action = $_POST['action'] ?? '';
@@ -51,11 +52,4 @@ try {
     }
 } catch (RuntimeException $e) {
     respondError(422, $e->getMessage());
-}
-
-function respondError(int $status, string $message): void
-{
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $message]);
-    exit;
 }

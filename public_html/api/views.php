@@ -1,13 +1,15 @@
 <?php
 
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_api.php';
 
-header('Content-Type: application/json; charset=utf-8');
+// Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
+// Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
+requireAuth();
 
 $method = $_SERVER['REQUEST_METHOD'];
 $pdo = Database::get();
+
+requireMethod(['GET', 'POST', 'DELETE']);
 
 if ($method === 'GET') {
     handleList($pdo);
@@ -31,22 +33,22 @@ if ($method === 'DELETE') {
     exit;
 }
 
-http_response_code(405);
-echo json_encode(['ok' => false, 'error' => 'Método no permitido.']);
-exit;
-
 function handleList(PDO $pdo): void
 {
-    $views = $pdo->query('SELECT id, nombre, description, created_at FROM views ORDER BY created_at DESC')->fetchAll();
+    $stmt = $pdo->prepare('SELECT id, nombre, description, created_at FROM views WHERE club_id = :club ORDER BY created_at DESC');
+    $stmt->execute(['club' => Auth::clubId()]);
+    $views = $stmt->fetchAll();
 
+    // club_id se repite en las tres tablas del JOIN a propósito: alcanza con que una sola quede sin
+    // filtrar para que se filtre el nombre de un dataset ajeno.
     $datasetStmt = $pdo->prepare(
         'SELECT d.id, d.nombre FROM datasets d
-         INNER JOIN view_datasets vd ON vd.dataset_id = d.id
-         WHERE vd.view_id = :view_id'
+         INNER JOIN view_datasets vd ON vd.dataset_id = d.id AND vd.club_id = d.club_id
+         WHERE vd.view_id = :view_id AND vd.club_id = :club AND d.club_id = :club2'
     );
 
     foreach ($views as &$view) {
-        $datasetStmt->execute(['view_id' => $view['id']]);
+        $datasetStmt->execute(['view_id' => $view['id'], 'club' => Auth::clubId(), 'club2' => Auth::clubId()]);
         $view['datasets'] = $datasetStmt->fetchAll();
     }
 
@@ -62,26 +64,42 @@ function handleSave(PDO $pdo): void
     // datasets pre-asignados: cada widget elige sus propios datasets al crearse.
     $datasetIds = array_map('intval', $_POST['dataset_ids'] ?? []);
 
+    // Ambos vienen del cliente. La vista, porque el UPDATE de abajo apuntaría a una ajena; los
+    // datasets, porque viajan a un INSERT en view_datasets (donde no hay WHERE que los filtre).
+    if ($id > 0) {
+        Scope::require($pdo, 'views', $id);
+    }
+    if (!empty($datasetIds)) {
+        Scope::requireAll($pdo, 'datasets', $datasetIds);
+    }
+
+    $clubId = Auth::clubId();
+
     $pdo->beginTransaction();
     try {
         if ($id > 0) {
-            $stmt = $pdo->prepare('UPDATE views SET nombre = :nombre, description = :description WHERE id = :id');
-            $stmt->execute(['nombre' => $nombre, 'description' => $description, 'id' => $id]);
+            $stmt = $pdo->prepare('UPDATE views SET nombre = :nombre, description = :description WHERE id = :id AND club_id = :club');
+            $stmt->execute(['nombre' => $nombre, 'description' => $description, 'id' => $id, 'club' => $clubId]);
         } else {
             if ($nombre === '') {
-                $count = (int) $pdo->query('SELECT COUNT(*) FROM views')->fetchColumn();
+                $cStmt = $pdo->prepare('SELECT COUNT(*) FROM views WHERE club_id = :club');
+                $cStmt->execute(['club' => $clubId]);
+                $count = (int) $cStmt->fetchColumn();
                 $nombre = 'Vista ' . ($count + 1);
             }
-            $pos = (int) $pdo->query('SELECT COALESCE(MAX(position), -1) + 1 FROM views')->fetchColumn();
-            $stmt = $pdo->prepare('INSERT INTO views (nombre, description, position) VALUES (:nombre, :description, :position)');
-            $stmt->execute(['nombre' => $nombre, 'description' => $description, 'position' => $pos]);
+            $pStmt = $pdo->prepare('SELECT COALESCE(MAX(position), -1) + 1 FROM views WHERE club_id = :club');
+            $pStmt->execute(['club' => $clubId]);
+            $pos = (int) $pStmt->fetchColumn();
+            $stmt = $pdo->prepare('INSERT INTO views (club_id, nombre, description, position) VALUES (:club, :nombre, :description, :position)');
+            $stmt->execute(['club' => $clubId, 'nombre' => $nombre, 'description' => $description, 'position' => $pos]);
             $id = (int) $pdo->lastInsertId();
         }
 
-        $pdo->prepare('DELETE FROM view_datasets WHERE view_id = :view_id')->execute(['view_id' => $id]);
-        $linkStmt = $pdo->prepare('INSERT INTO view_datasets (view_id, dataset_id) VALUES (:view_id, :dataset_id)');
+        $pdo->prepare('DELETE FROM view_datasets WHERE view_id = :view_id AND club_id = :club')
+            ->execute(['view_id' => $id, 'club' => $clubId]);
+        $linkStmt = $pdo->prepare('INSERT INTO view_datasets (club_id, view_id, dataset_id) VALUES (:club, :view_id, :dataset_id)');
         foreach (array_unique($datasetIds) as $datasetId) {
-            $linkStmt->execute(['view_id' => $id, 'dataset_id' => $datasetId]);
+            $linkStmt->execute(['club' => $clubId, 'view_id' => $id, 'dataset_id' => $datasetId]);
         }
 
         $pdo->commit();
@@ -104,8 +122,9 @@ function handleRename(PDO $pdo): void
     if ($id <= 0 || $nombre === '') {
         respondError(400, 'Falta el id o el nombre.');
     }
-    $stmt = $pdo->prepare('UPDATE views SET nombre = :nombre WHERE id = :id');
-    $stmt->execute(['nombre' => $nombre, 'id' => $id]);
+    Scope::require($pdo, 'views', $id);
+    $stmt = $pdo->prepare('UPDATE views SET nombre = :nombre WHERE id = :id AND club_id = :club');
+    $stmt->execute(['nombre' => $nombre, 'id' => $id, 'club' => Auth::clubId()]);
     echo json_encode(['ok' => true, 'id' => $id, 'nombre' => $nombre]);
 }
 
@@ -119,11 +138,14 @@ function handleReorder(PDO $pdo): void
     if (!is_array($ids) || empty($ids)) {
         respondError(400, 'Faltan los ids.');
     }
-    $stmt = $pdo->prepare('UPDATE views SET position = :position WHERE id = :id');
+    // Lista de ids arbitraria del cliente: falla en bloque si alguno no es de este club.
+    Scope::requireAll($pdo, 'views', $ids);
+
+    $stmt = $pdo->prepare('UPDATE views SET position = :position WHERE id = :id AND club_id = :club');
     $pdo->beginTransaction();
     try {
         foreach ($ids as $i => $id) {
-            $stmt->execute(['position' => $i, 'id' => (int) $id]);
+            $stmt->execute(['position' => $i, 'id' => (int) $id, 'club' => Auth::clubId()]);
         }
         $pdo->commit();
     } catch (PDOException $e) {
@@ -139,14 +161,8 @@ function handleDelete(PDO $pdo): void
     if ($id <= 0) {
         respondError(400, 'Falta el id de la vista a eliminar.');
     }
-    $stmt = $pdo->prepare('DELETE FROM views WHERE id = :id');
-    $stmt->execute(['id' => $id]);
+    Scope::require($pdo, 'views', $id);
+    $stmt = $pdo->prepare('DELETE FROM views WHERE id = :id AND club_id = :club');
+    $stmt->execute(['id' => $id, 'club' => Auth::clubId()]);
     echo json_encode(['ok' => true]);
-}
-
-function respondError(int $status, string $message): void
-{
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $message]);
-    exit;
 }

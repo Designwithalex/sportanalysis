@@ -1,15 +1,17 @@
 <?php
 
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_api.php';
 require __DIR__ . '/../app/WidgetSchema.php';
 require __DIR__ . '/../app/WidgetRenderer.php';
 
-header('Content-Type: application/json; charset=utf-8');
+// Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
+// Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
+requireAuth();
 
 $method = $_SERVER['REQUEST_METHOD'];
 $pdo = Database::get();
+
+requireMethod(['GET', 'POST', 'DELETE']);
 
 if ($method === 'GET') {
     handleList($pdo);
@@ -35,19 +37,17 @@ if ($method === 'DELETE') {
     exit;
 }
 
-http_response_code(405);
-echo json_encode(['ok' => false, 'error' => 'Método no permitido.']);
-exit;
-
 function handleList(PDO $pdo): void
 {
     $viewId = (int) ($_GET['view_id'] ?? 0);
     if ($viewId <= 0) {
         respondError(400, 'Falta view_id.');
     }
+    // view_id viene del cliente: 404 si la vista no es de este club.
+    Scope::require($pdo, 'views', $viewId);
 
-    $stmt = $pdo->prepare('SELECT id, type, config, position FROM widgets WHERE view_id = :view_id ORDER BY position, id');
-    $stmt->execute(['view_id' => $viewId]);
+    $stmt = $pdo->prepare('SELECT id, type, config, position FROM widgets WHERE view_id = :view_id AND club_id = :club ORDER BY position, id');
+    $stmt->execute(['view_id' => $viewId, 'club' => Auth::clubId()]);
     $widgets = $stmt->fetchAll();
 
     $globalFilters = loadActiveFilters($pdo, $viewId);
@@ -78,8 +78,8 @@ function handleList(PDO $pdo): void
     if (!empty($widgets)) {
         $ids = array_column($widgets, 'id');
         $in = implode(',', array_fill(0, count($ids), '?'));
-        $vStmt = $pdo->prepare("SELECT widget_id, COUNT(*) AS c FROM widget_versions WHERE widget_id IN ($in) GROUP BY widget_id");
-        $vStmt->execute($ids);
+        $vStmt = $pdo->prepare("SELECT widget_id, COUNT(*) AS c FROM widget_versions WHERE widget_id IN ($in) AND club_id = ? GROUP BY widget_id");
+        $vStmt->execute([...$ids, Auth::clubId()]);
         foreach ($vStmt->fetchAll() as $row) {
             $versionCounts[$row['widget_id']] = (int) $row['c'];
         }
@@ -94,8 +94,8 @@ function handleList(PDO $pdo): void
 /** @return array<int,array{column:string,operator:string,value:mixed}> filtros globales de la vista */
 function loadActiveFilters(PDO $pdo, int $viewId): array
 {
-    $stmt = $pdo->prepare('SELECT column_name, config FROM view_filters WHERE view_id = :view_id');
-    $stmt->execute(['view_id' => $viewId]);
+    $stmt = $pdo->prepare('SELECT column_name, config FROM view_filters WHERE view_id = :view_id AND club_id = :club');
+    $stmt->execute(['view_id' => $viewId, 'club' => Auth::clubId()]);
     $filters = [];
     foreach ($stmt->fetchAll() as $f) {
         $cfg = json_decode($f['config'], true) ?? [];
@@ -119,10 +119,20 @@ function handleSave(PDO $pdo): void
         respondError(400, 'Datos inválidos.');
     }
 
+    // IDOR canónico: sin esto, un POST con el view_id de otro club insertaba un widget colgado de
+    // una vista ajena. La validación va ANTES del INSERT, no en el WHERE (un INSERT no tiene WHERE).
+    Scope::require($pdo, 'views', $viewId);
+    if ($widgetId > 0) {
+        Scope::require($pdo, 'widgets', $widgetId);
+    }
+
     $datasetIds = WidgetRenderer::datasetIds($config);
     if (empty($datasetIds)) {
         respondError(422, 'El widget no indica ningún dataset.');
     }
+    // config.dataset_ids es JSON libre: ninguna FK lo cubre. Si no se valida acá, un widget puede
+    // quedar apuntando a datasets de otro club y el renderer se los muestra.
+    Scope::requireAll($pdo, 'datasets', $datasetIds);
     [$columnSchema, $customMetrics] = loadDatasetContext($pdo, $viewId, $datasetIds);
     if ($columnSchema === null) {
         respondError(422, 'Alguno de los datasets indicados no existe.');
@@ -136,20 +146,20 @@ function handleSave(PDO $pdo): void
     $pdo->beginTransaction();
     try {
         if ($widgetId > 0) {
-            $pdo->prepare('UPDATE widgets SET type = :type, config = :config WHERE id = :id')
-                ->execute(['type' => $type, 'config' => json_encode($config, JSON_UNESCAPED_UNICODE), 'id' => $widgetId]);
+            $pdo->prepare('UPDATE widgets SET type = :type, config = :config WHERE id = :id AND club_id = :club')
+                ->execute(['type' => $type, 'config' => json_encode($config, JSON_UNESCAPED_UNICODE), 'id' => $widgetId, 'club' => Auth::clubId()]);
         } else {
-            $posStmt = $pdo->prepare('SELECT COALESCE(MAX(position), -1) + 1 FROM widgets WHERE view_id = :view_id');
-            $posStmt->execute(['view_id' => $viewId]);
+            $posStmt = $pdo->prepare('SELECT COALESCE(MAX(position), -1) + 1 FROM widgets WHERE view_id = :view_id AND club_id = :club');
+            $posStmt->execute(['view_id' => $viewId, 'club' => Auth::clubId()]);
             $position = (int) $posStmt->fetchColumn();
 
-            $pdo->prepare('INSERT INTO widgets (view_id, type, config, position) VALUES (:view_id, :type, :config, :position)')
-                ->execute(['view_id' => $viewId, 'type' => $type, 'config' => json_encode($config, JSON_UNESCAPED_UNICODE), 'position' => $position]);
+            $pdo->prepare('INSERT INTO widgets (club_id, view_id, type, config, position) VALUES (:club, :view_id, :type, :config, :position)')
+                ->execute(['club' => Auth::clubId(), 'view_id' => $viewId, 'type' => $type, 'config' => json_encode($config, JSON_UNESCAPED_UNICODE), 'position' => $position]);
             $widgetId = (int) $pdo->lastInsertId();
         }
 
-        $pdo->prepare('INSERT INTO widget_versions (widget_id, config, source) VALUES (:widget_id, :config, "manual")')
-            ->execute(['widget_id' => $widgetId, 'config' => json_encode($config, JSON_UNESCAPED_UNICODE)]);
+        $pdo->prepare('INSERT INTO widget_versions (club_id, widget_id, config, source) VALUES (:club, :widget_id, :config, "manual")')
+            ->execute(['club' => Auth::clubId(), 'widget_id' => $widgetId, 'config' => json_encode($config, JSON_UNESCAPED_UNICODE)]);
 
         pruneVersions($pdo, $widgetId);
 
@@ -165,24 +175,21 @@ function handleSave(PDO $pdo): void
 function handleDuplicate(PDO $pdo): void
 {
     $widgetId = (int) ($_POST['id'] ?? 0);
-    $stmt = $pdo->prepare('SELECT view_id, type, config FROM widgets WHERE id = :id');
-    $stmt->execute(['id' => $widgetId]);
-    $widget = $stmt->fetch();
-    if (!$widget) {
-        respondError(404, 'Widget no encontrado.');
-    }
+    // El id viene del cliente. Scope::require corta con 404 si el widget es de otro club: si no,
+    // el SELECT lo leería y el INSERT clonaría un widget ajeno dentro de la vista ajena.
+    $widget = Scope::require($pdo, 'widgets', $widgetId);
 
-    $posStmt = $pdo->prepare('SELECT COALESCE(MAX(position), -1) + 1 FROM widgets WHERE view_id = :view_id');
-    $posStmt->execute(['view_id' => $widget['view_id']]);
+    $posStmt = $pdo->prepare('SELECT COALESCE(MAX(position), -1) + 1 FROM widgets WHERE view_id = :view_id AND club_id = :club');
+    $posStmt->execute(['view_id' => $widget['view_id'], 'club' => Auth::clubId()]);
     $position = (int) $posStmt->fetchColumn();
 
     $pdo->beginTransaction();
     try {
-        $pdo->prepare('INSERT INTO widgets (view_id, type, config, position) VALUES (:view_id, :type, :config, :position)')
-            ->execute(['view_id' => $widget['view_id'], 'type' => $widget['type'], 'config' => $widget['config'], 'position' => $position]);
+        $pdo->prepare('INSERT INTO widgets (club_id, view_id, type, config, position) VALUES (:club, :view_id, :type, :config, :position)')
+            ->execute(['club' => Auth::clubId(), 'view_id' => $widget['view_id'], 'type' => $widget['type'], 'config' => $widget['config'], 'position' => $position]);
         $newId = (int) $pdo->lastInsertId();
-        $pdo->prepare('INSERT INTO widget_versions (widget_id, config, source) VALUES (:widget_id, :config, "manual")')
-            ->execute(['widget_id' => $newId, 'config' => $widget['config']]);
+        $pdo->prepare('INSERT INTO widget_versions (club_id, widget_id, config, source) VALUES (:club, :widget_id, :config, "manual")')
+            ->execute(['club' => Auth::clubId(), 'widget_id' => $newId, 'config' => $widget['config']]);
         $pdo->commit();
     } catch (PDOException $e) {
         $pdo->rollBack();
@@ -195,9 +202,12 @@ function handleDuplicate(PDO $pdo): void
 function handleUndo(PDO $pdo): void
 {
     $widgetId = (int) ($_POST['id'] ?? 0);
+    // Dos saltos hasta la raíz (widget_versions → widgets → views): validamos el widget, y las
+    // versiones se filtran por club en el propio WHERE.
+    Scope::require($pdo, 'widgets', $widgetId);
 
-    $versions = $pdo->prepare('SELECT id, config FROM widget_versions WHERE widget_id = :widget_id ORDER BY id DESC LIMIT 2');
-    $versions->execute(['widget_id' => $widgetId]);
+    $versions = $pdo->prepare('SELECT id, config FROM widget_versions WHERE widget_id = :widget_id AND club_id = :club ORDER BY id DESC LIMIT 2');
+    $versions->execute(['widget_id' => $widgetId, 'club' => Auth::clubId()]);
     $rows = $versions->fetchAll();
 
     if (count($rows) < 2) {
@@ -206,9 +216,10 @@ function handleUndo(PDO $pdo): void
 
     $pdo->beginTransaction();
     try {
-        $pdo->prepare('DELETE FROM widget_versions WHERE id = :id')->execute(['id' => $rows[0]['id']]);
-        $pdo->prepare('UPDATE widgets SET config = :config WHERE id = :id')
-            ->execute(['config' => $rows[1]['config'], 'id' => $widgetId]);
+        $pdo->prepare('DELETE FROM widget_versions WHERE id = :id AND club_id = :club')
+            ->execute(['id' => $rows[0]['id'], 'club' => Auth::clubId()]);
+        $pdo->prepare('UPDATE widgets SET config = :config WHERE id = :id AND club_id = :club')
+            ->execute(['config' => $rows[1]['config'], 'id' => $widgetId, 'club' => Auth::clubId()]);
         $pdo->commit();
     } catch (PDOException $e) {
         $pdo->rollBack();
@@ -221,10 +232,17 @@ function handleUndo(PDO $pdo): void
 function handleReorder(PDO $pdo): void
 {
     $ids = $_POST['ids'] ?? [];
-    $stmt = $pdo->prepare('UPDATE widgets SET position = :position WHERE id = :id');
+    if (!is_array($ids)) {
+        respondError(400, 'Faltan los ids.');
+    }
+    // Aceptaba cualquier lista de ids: se podía reordenar (y por lo tanto detectar la existencia de)
+    // widgets de otro club. requireAll falla en bloque si uno solo es ajeno.
+    Scope::requireAll($pdo, 'widgets', $ids);
+
+    $stmt = $pdo->prepare('UPDATE widgets SET position = :position WHERE id = :id AND club_id = :club');
     $pdo->beginTransaction();
     foreach ($ids as $i => $id) {
-        $stmt->execute(['position' => $i, 'id' => (int) $id]);
+        $stmt->execute(['position' => $i, 'id' => (int) $id, 'club' => Auth::clubId()]);
     }
     $pdo->commit();
     echo json_encode(['ok' => true]);
@@ -236,20 +254,27 @@ function handleDelete(PDO $pdo): void
     if ($id <= 0) {
         respondError(400, 'Falta id.');
     }
-    $pdo->prepare('DELETE FROM widgets WHERE id = :id')->execute(['id' => $id]);
+    // El id viene del cliente: 404 si el widget es de otro club.
+    Scope::require($pdo, 'widgets', $id);
+    $pdo->prepare('DELETE FROM widgets WHERE id = :id AND club_id = :club')
+        ->execute(['id' => $id, 'club' => Auth::clubId()]);
     echo json_encode(['ok' => true]);
 }
 
 function pruneVersions(PDO $pdo, int $widgetId, int $keep = 10): void
 {
-    $stmt = $pdo->prepare('SELECT id FROM widget_versions WHERE widget_id = :widget_id ORDER BY id DESC LIMIT 1000 OFFSET :offset');
+    $stmt = $pdo->prepare('SELECT id FROM widget_versions WHERE widget_id = :widget_id AND club_id = :club ORDER BY id DESC LIMIT 1000 OFFSET :offset');
     $stmt->bindValue('widget_id', $widgetId, PDO::PARAM_INT);
+    $stmt->bindValue('club', Auth::clubId(), PDO::PARAM_INT);
     $stmt->bindValue('offset', $keep, PDO::PARAM_INT);
     $stmt->execute();
     $toDelete = $stmt->fetchAll(PDO::FETCH_COLUMN);
     if (!empty($toDelete)) {
         $in = implode(',', array_map('intval', $toDelete));
-        $pdo->exec("DELETE FROM widget_versions WHERE id IN ($in)");
+        // Los ids salen del SELECT de arriba (ya filtrado por club), pero el club_id se repite acá
+        // igual: si alguien cambia ese SELECT, este DELETE no se convierte en un borrado global.
+        $pdo->prepare("DELETE FROM widget_versions WHERE id IN ($in) AND club_id = :club")
+            ->execute(['club' => Auth::clubId()]);
     }
 }
 
@@ -262,8 +287,8 @@ function pruneVersions(PDO $pdo, int $widgetId, int $keep = 10): void
 function loadDatasetContext(PDO $pdo, int $viewId, array $datasetIds): array
 {
     $placeholders = implode(',', array_fill(0, count($datasetIds), '?'));
-    $stmt = $pdo->prepare("SELECT id, column_schema FROM datasets WHERE id IN ($placeholders)");
-    $stmt->execute($datasetIds);
+    $stmt = $pdo->prepare("SELECT id, column_schema FROM datasets WHERE id IN ($placeholders) AND club_id = ?");
+    $stmt->execute([...array_values($datasetIds), Auth::clubId()]);
     $found = $stmt->fetchAll();
     if (count($found) !== count($datasetIds)) {
         return [null, []];
@@ -272,16 +297,9 @@ function loadDatasetContext(PDO $pdo, int $viewId, array $datasetIds): array
     $effectiveSchema = WidgetSchema::effectiveSchema($schemas);
 
     $metricsStmt = $pdo->prepare(
-        "SELECT id, nombre FROM custom_metrics WHERE view_id = ? AND dataset_id IN ($placeholders)"
+        "SELECT id, nombre FROM custom_metrics WHERE view_id = ? AND dataset_id IN ($placeholders) AND club_id = ?"
     );
-    $metricsStmt->execute(array_merge([$viewId], $datasetIds));
+    $metricsStmt->execute([$viewId, ...array_values($datasetIds), Auth::clubId()]);
 
     return [$effectiveSchema, $metricsStmt->fetchAll()];
-}
-
-function respondError(int $status, string $message): void
-{
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $message]);
-    exit;
 }

@@ -1,18 +1,24 @@
 <?php
 
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_api.php';
 
-header('Content-Type: application/json; charset=utf-8');
+// Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
+// Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
+requireAuth();
 
 $method = $_SERVER['REQUEST_METHOD'];
 $pdo = Database::get();
 
+requireMethod(['GET', 'POST', 'DELETE']);
+
 if ($method === 'GET') {
     $viewId = (int) ($_GET['view_id'] ?? 0);
-    $stmt = $pdo->prepare('SELECT id, dataset_id, column_name, filter_type, config FROM view_filters WHERE view_id = :view_id');
-    $stmt->execute(['view_id' => $viewId]);
+    // Sin view_id devolvía lista vacía; se mantiene tal cual para no cambiar el comportamiento.
+    if ($viewId > 0) {
+        Scope::require($pdo, 'views', $viewId);
+    }
+    $stmt = $pdo->prepare('SELECT id, dataset_id, column_name, filter_type, config FROM view_filters WHERE view_id = :view_id AND club_id = :club');
+    $stmt->execute(['view_id' => $viewId, 'club' => Auth::clubId()]);
     $filters = $stmt->fetchAll();
     foreach ($filters as &$f) {
         $f['config'] = json_decode($f['config'], true);
@@ -43,12 +49,17 @@ if ($method === 'POST') {
         respondError(422, 'Falta el valor del filtro.');
     }
 
+    // view_id viene del cliente y viaja a un INSERT: sin esto se podía colgar un filtro de la vista
+    // de otro club (y con eso alterar lo que ese club ve en su dashboard).
+    Scope::require($pdo, 'views', $viewId);
+
     $config = json_encode(['operator' => $operator, 'value' => $value], JSON_UNESCAPED_UNICODE);
 
     $stmt = $pdo->prepare(
-        'INSERT INTO view_filters (view_id, dataset_id, column_name, filter_type, config) VALUES (:view_id, NULL, :column_name, :filter_type, :config)'
+        'INSERT INTO view_filters (club_id, view_id, dataset_id, column_name, filter_type, config) VALUES (:club, :view_id, NULL, :column_name, :filter_type, :config)'
     );
     $stmt->execute([
+        'club' => Auth::clubId(),
         'view_id' => $viewId,
         'column_name' => $columnName,
         'filter_type' => 'segment',
@@ -64,17 +75,10 @@ if ($method === 'DELETE') {
     if ($id <= 0) {
         respondError(400, 'Falta id.');
     }
-    $pdo->prepare('DELETE FROM view_filters WHERE id = :id')->execute(['id' => $id]);
+    // Cadena view_filters → views. El id llega del cliente: 404 si el filtro es de otro club.
+    Scope::require($pdo, 'view_filters', $id);
+    $pdo->prepare('DELETE FROM view_filters WHERE id = :id AND club_id = :club')
+        ->execute(['id' => $id, 'club' => Auth::clubId()]);
     echo json_encode(['ok' => true]);
-    exit;
-}
-
-http_response_code(405);
-echo json_encode(['ok' => false, 'error' => 'Método no permitido.']);
-
-function respondError(int $status, string $message): void
-{
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $message]);
     exit;
 }

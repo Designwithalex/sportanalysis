@@ -1,7 +1,6 @@
 <?php
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_page.php';
+requireAuth();
 
 $categorias = [
     'partidos'       => ['label' => 'Partidos',       'cols' => ['Distancia (m)', 'Sprints', 'Distancia sprint (m)', 'Vel. máx (km/h)', 'Player Load', 'Minutos']],
@@ -21,7 +20,13 @@ $pageTitle = 'Cargar a mano — ' . $cat['label'];
 $currentStep = 2;
 
 $pdo = Database::get();
-$players = $pdo->query('SELECT id, nombre, familia, sub_familia FROM players ORDER BY nombre')->fetchAll();
+// Las filas de la grilla de carga SON el plantel: sin el filtro por club, un club cargaría datos
+// sobre los jugadores de otro.
+$stmt = $pdo->prepare(
+    'SELECT id, nombre, familia, sub_familia FROM players WHERE club_id = :club ORDER BY nombre'
+);
+$stmt->execute(['club' => Auth::clubId()]);
+$players = $stmt->fetchAll();
 
 require __DIR__ . '/../app/views/head.php';
 ?>

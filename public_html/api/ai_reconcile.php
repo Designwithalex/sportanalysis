@@ -1,17 +1,18 @@
 <?php
 
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_api.php';
 require __DIR__ . '/../app/AnthropicClient.php';
 
-header('Content-Type: application/json; charset=utf-8');
+// Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
+// Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
+requireAuth();
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    echo json_encode(['ok' => false, 'error' => 'Método no permitido.']);
-    exit;
-}
+requireMethod('POST');
+
+// PHP mantiene un lock exclusivo sobre el archivo de sesión mientras está abierta, lo que serializa
+// todas las requests del mismo usuario. Con una llamada a la IA de ~60s por delante, eso congelaría
+// la app entera. Cerramos la sesión para escritura acá; a partir de este punto no se toca $_SESSION.
+session_write_close();
 
 $pdo = Database::get();
 $datasetId = (int) ($_POST['dataset_id'] ?? 0);
@@ -19,12 +20,20 @@ if ($datasetId <= 0) {
     respondError(400, 'Falta dataset_id.');
 }
 
+// dataset_id llega del cliente y todo lo que sale de él (nombres crudos, plantel) termina en el
+// prompt de la IA. 404 antes de leer nada si el dataset no es de este club.
+Scope::require($pdo, 'datasets', $datasetId);
+
+// Se resuelve ANTES de la llamada a la IA: después de session_write_close() + ~60s de espera no
+// queremos depender de volver a resolver la sesión. Auth lo tiene cacheado desde requireAuth().
+$clubId = Auth::clubId();
+
 // Nombres crudos que todavía no matchean (una sola vez cada uno).
 $stmt = $pdo->prepare(
     "SELECT DISTINCT raw_name FROM dataset_rows
-     WHERE dataset_id = :id AND match_status = 'unmatched' AND raw_name IS NOT NULL AND raw_name <> ''"
+     WHERE dataset_id = :id AND club_id = :club AND match_status = 'unmatched' AND raw_name IS NOT NULL AND raw_name <> ''"
 );
-$stmt->execute(['id' => $datasetId]);
+$stmt->execute(['id' => $datasetId, 'club' => $clubId]);
 $rawNames = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
 if (empty($rawNames)) {
@@ -32,7 +41,10 @@ if (empty($rawNames)) {
     exit;
 }
 
-$players = $pdo->query('SELECT id, nombre FROM players ORDER BY nombre')->fetchAll();
+// Solo el plantel de este club: la lista completa de nombres viaja al prompt de la IA.
+$playersStmt = $pdo->prepare('SELECT id, nombre FROM players WHERE club_id = :club ORDER BY nombre');
+$playersStmt->execute(['club' => $clubId]);
+$players = $playersStmt->fetchAll();
 if (empty($players)) {
     respondError(422, 'No hay plantel cargado para matchear.');
 }
@@ -79,13 +91,13 @@ $rawSet = array_flip($rawNames);
 
 // Aseguramos que exista una reconciliación pendiente por nombre, y le cargamos la sugerencia de la IA.
 $ensureStmt = $pdo->prepare(
-    'INSERT INTO name_reconciliations (dataset_id, raw_name, suggested_player_id, resolution)
-     VALUES (:dataset_id, :raw_name, :suggested_player_id, "pending")'
+    'INSERT INTO name_reconciliations (club_id, dataset_id, raw_name, suggested_player_id, resolution)
+     VALUES (:club, :dataset_id, :raw_name, :suggested_player_id, "pending")'
 );
-$existsStmt = $pdo->prepare('SELECT id, resolution FROM name_reconciliations WHERE dataset_id = :dataset_id AND raw_name = :raw_name');
+$existsStmt = $pdo->prepare('SELECT id, resolution FROM name_reconciliations WHERE dataset_id = :dataset_id AND club_id = :club AND raw_name = :raw_name');
 $updateStmt = $pdo->prepare(
     'UPDATE name_reconciliations SET suggested_player_id = :sid
-     WHERE dataset_id = :dataset_id AND raw_name = :raw_name AND resolution = "pending"'
+     WHERE dataset_id = :dataset_id AND club_id = :club AND raw_name = :raw_name AND resolution = "pending"'
 );
 
 $suggested = 0;
@@ -105,13 +117,13 @@ try {
             continue; // sin match: no sugerimos nada
         }
 
-        $existsStmt->execute(['dataset_id' => $datasetId, 'raw_name' => $raw]);
+        $existsStmt->execute(['dataset_id' => $datasetId, 'club' => $clubId, 'raw_name' => $raw]);
         $existing = $existsStmt->fetch();
         if (!$existing) {
-            $ensureStmt->execute(['dataset_id' => $datasetId, 'raw_name' => $raw, 'suggested_player_id' => $sid]);
+            $ensureStmt->execute(['club' => $clubId, 'dataset_id' => $datasetId, 'raw_name' => $raw, 'suggested_player_id' => $sid]);
             $suggested++;
         } elseif ($existing['resolution'] === 'pending') {
-            $updateStmt->execute(['sid' => $sid, 'dataset_id' => $datasetId, 'raw_name' => $raw]);
+            $updateStmt->execute(['sid' => $sid, 'dataset_id' => $datasetId, 'club' => $clubId, 'raw_name' => $raw]);
             $suggested++;
         }
     }
@@ -127,10 +139,3 @@ echo json_encode([
     'message' => "La IA sugirió $suggested match(es). Revisá y confirmá cada uno abajo.",
 ]);
 exit;
-
-function respondError(int $status, string $message): void
-{
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $message]);
-    exit;
-}

@@ -1,20 +1,31 @@
 <?php
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_page.php';
+requireAuth();
 
 $pageTitle = 'SportAnalysis';
 
 $pdo = Database::get();
-$views = $pdo->query('SELECT id, nombre, tipo FROM views ORDER BY position, id')->fetchAll();
+$clubId = Auth::clubId();
+
+$stmt = $pdo->prepare('SELECT id, nombre, tipo FROM views WHERE club_id = :club ORDER BY position, id');
+$stmt->execute(['club' => $clubId]);
+$views = $stmt->fetchAll();
 
 // Las vistas de jugador (overview) se agrupan aparte, en un desplegable, para no llenar la barra
 // de tabs con 30+ jugadores. Las manuales y de cluster van como tabs inline.
 $mainViews = array_values(array_filter($views, fn($v) => $v['tipo'] !== 'player'));
 $playerViews = array_values(array_filter($views, fn($v) => $v['tipo'] === 'player'));
 
-$defaultViewId = $mainViews[0]['id'] ?? ($views[0]['id'] ?? 0);
-$activeViewId = (int) ($_GET['view_id'] ?? $defaultViewId);
+$defaultViewId = (int) ($mainViews[0]['id'] ?? ($views[0]['id'] ?? 0));
+
+// `?view_id=` viene del cliente: sin validar, alguien pega el id de una vista de otro club y le
+// renderizamos el tablero entero. Scope::find() devuelve la fila solo si es del club de la sesión.
+// Si no lo es (o no existe, o es basura), caemos en silencio a la vista por defecto: no mostramos
+// un error, porque un "esa vista no es tuya" confirmaría que el id existe.
+$requestedViewId = (int) ($_GET['view_id'] ?? 0);
+$activeViewId = ($requestedViewId > 0 && Scope::find($pdo, 'views', $requestedViewId) !== null)
+    ? $requestedViewId
+    : $defaultViewId;
 
 $activePlayerView = null;
 foreach ($playerViews as $pv) {
@@ -27,7 +38,11 @@ foreach ($views as $vv) {
 }
 
 // Todos los datasets están disponibles para cualquier widget (el cruce lo decide cada widget).
-$datasets = $pdo->query('SELECT id, nombre, categoria, column_schema FROM datasets ORDER BY categoria, uploaded_at')->fetchAll();
+$stmt = $pdo->prepare(
+    'SELECT id, nombre, categoria, column_schema FROM datasets WHERE club_id = :club ORDER BY categoria, uploaded_at'
+);
+$stmt->execute(['club' => $clubId]);
+$datasets = $stmt->fetchAll();
 foreach ($datasets as &$d) {
     $d['column_schema'] = json_decode($d['column_schema'], true);
 }
@@ -50,12 +65,19 @@ foreach ($catLabels as $k => $lbl) {
         $baseClusters[] = ['categoria' => $k, 'label' => $lbl, 'count' => $clusterCounts[$k]];
     }
 }
-$playerCount = (int) $pdo->query('SELECT COUNT(*) FROM players')->fetchColumn();
+// Alimenta el "Generar también un overview por jugador (N jugadores)" del modal de vistas base.
+$stmt = $pdo->prepare('SELECT COUNT(*) FROM players WHERE club_id = :club');
+$stmt->execute(['club' => $clubId]);
+$playerCount = (int) $stmt->fetchColumn();
 $openBaseViews = isset($_GET['base_views']);
 
 // Valores posibles para los filtros globales de vista (dimensiones universales del plantel).
+// Solo del plantel del club: este array viaja al HTML como DIM_VALUES y llena el datalist del
+// modal de filtros — con la tabla entera, filtrar por "Jugador" ofrecería nombres de otros clubes.
 $dimValues = ['__familia' => [], '__sub_familia' => [], '__player_nombre' => []];
-foreach ($pdo->query('SELECT nombre, familia, sub_familia FROM players ORDER BY nombre')->fetchAll() as $p) {
+$stmt = $pdo->prepare('SELECT nombre, familia, sub_familia FROM players WHERE club_id = :club ORDER BY nombre');
+$stmt->execute(['club' => $clubId]);
+foreach ($stmt->fetchAll() as $p) {
     if ($p['familia'] !== null && $p['familia'] !== '') $dimValues['__familia'][$p['familia']] = true;
     if ($p['sub_familia'] !== null && $p['sub_familia'] !== '') $dimValues['__sub_familia'][$p['sub_familia']] = true;
     if ($p['nombre'] !== null && $p['nombre'] !== '') $dimValues['__player_nombre'][$p['nombre']] = true;

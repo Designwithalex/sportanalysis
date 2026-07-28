@@ -1,19 +1,20 @@
 <?php
 
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_api.php';
 require __DIR__ . '/../app/WidgetSchema.php';
 require __DIR__ . '/../app/WidgetRenderer.php';
 require __DIR__ . '/../app/AnthropicClient.php';
 
-header('Content-Type: application/json; charset=utf-8');
+// Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
+// Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
+requireAuth();
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    echo json_encode(['ok' => false, 'error' => 'Método no permitido.']);
-    exit;
-}
+requireMethod('POST');
+
+// PHP mantiene un lock exclusivo sobre el archivo de sesión mientras está abierta, lo que serializa
+// todas las requests del mismo usuario. Con una llamada a la IA de ~60s por delante, eso congelaría
+// la app entera. Cerramos la sesión para escritura acá; a partir de este punto no se toca $_SESSION.
+session_write_close();
 
 $pdo = Database::get();
 $action = $_POST['action'] ?? 'propose';
@@ -98,18 +99,21 @@ function handleApply(PDO $pdo): void
 
     $pdo->beginTransaction();
     try {
-        $pdo->prepare('UPDATE widgets SET config = :config WHERE id = :id')
-            ->execute(['config' => json_encode($mergedConfig, JSON_UNESCAPED_UNICODE), 'id' => $widgetId]);
+        $clubId = Auth::clubId();
 
-        $pdo->prepare('INSERT INTO widget_versions (widget_id, config, source) VALUES (:widget_id, :config, "ai")')
-            ->execute(['widget_id' => $widgetId, 'config' => json_encode($mergedConfig, JSON_UNESCAPED_UNICODE)]);
+        $pdo->prepare('UPDATE widgets SET config = :config WHERE id = :id AND club_id = :club')
+            ->execute(['config' => json_encode($mergedConfig, JSON_UNESCAPED_UNICODE), 'id' => $widgetId, 'club' => $clubId]);
 
-        $stmt = $pdo->prepare('SELECT id FROM widget_versions WHERE widget_id = :widget_id ORDER BY id DESC LIMIT 1000 OFFSET 10');
-        $stmt->execute(['widget_id' => $widgetId]);
+        $pdo->prepare('INSERT INTO widget_versions (club_id, widget_id, config, source) VALUES (:club, :widget_id, :config, "ai")')
+            ->execute(['club' => $clubId, 'widget_id' => $widgetId, 'config' => json_encode($mergedConfig, JSON_UNESCAPED_UNICODE)]);
+
+        $stmt = $pdo->prepare('SELECT id FROM widget_versions WHERE widget_id = :widget_id AND club_id = :club ORDER BY id DESC LIMIT 1000 OFFSET 10');
+        $stmt->execute(['widget_id' => $widgetId, 'club' => $clubId]);
         $toDelete = $stmt->fetchAll(PDO::FETCH_COLUMN);
         if (!empty($toDelete)) {
             $in = implode(',', array_map('intval', $toDelete));
-            $pdo->exec("DELETE FROM widget_versions WHERE id IN ($in)");
+            $pdo->prepare("DELETE FROM widget_versions WHERE id IN ($in) AND club_id = :club")
+                ->execute(['club' => $clubId]);
         }
 
         $pdo->commit();
@@ -121,15 +125,15 @@ function handleApply(PDO $pdo): void
     echo json_encode(['ok' => true]);
 }
 
-/** @return array{view_id:int, type:string, config:array} */
+/**
+ * widget_id llega del cliente y su config se manda al prompt de la IA. Scope::require corta con 404
+ * si el widget es de otro club: es lo que impide que datos ajenos salgan hacia la API de Anthropic.
+ *
+ * @return array{view_id:int, type:string, config:array}
+ */
 function fetchWidget(PDO $pdo, int $widgetId): array
 {
-    $stmt = $pdo->prepare('SELECT view_id, type, config FROM widgets WHERE id = :id');
-    $stmt->execute(['id' => $widgetId]);
-    $row = $stmt->fetch();
-    if (!$row) {
-        respondError(404, 'Widget no encontrado.');
-    }
+    $row = Scope::require($pdo, 'widgets', $widgetId);
     return ['view_id' => (int) $row['view_id'], 'type' => $row['type'], 'config' => json_decode($row['config'], true)];
 }
 
@@ -142,16 +146,18 @@ function fetchDatasetContext(PDO $pdo, int $viewId, array $datasetIds): array
     if (empty($datasetIds)) {
         return [WidgetSchema::SYNTHETIC_COLUMNS, []];
     }
+    // El schema que sale de acá termina literalmente dentro del system prompt de la IA. Sin el
+    // club_id, los nombres de columna de un dataset ajeno viajarían a la API de Anthropic.
     $placeholders = implode(',', array_fill(0, count($datasetIds), '?'));
-    $stmt = $pdo->prepare("SELECT column_schema FROM datasets WHERE id IN ($placeholders)");
-    $stmt->execute($datasetIds);
+    $stmt = $pdo->prepare("SELECT column_schema FROM datasets WHERE id IN ($placeholders) AND club_id = ?");
+    $stmt->execute([...array_values($datasetIds), Auth::clubId()]);
     $schemas = array_map(fn($r) => json_decode($r['column_schema'], true), $stmt->fetchAll());
     $columnSchema = WidgetSchema::effectiveSchema($schemas);
 
     $metricsStmt = $pdo->prepare(
-        "SELECT id, nombre FROM custom_metrics WHERE view_id = ? AND dataset_id IN ($placeholders)"
+        "SELECT id, nombre FROM custom_metrics WHERE view_id = ? AND dataset_id IN ($placeholders) AND club_id = ?"
     );
-    $metricsStmt->execute(array_merge([$viewId], $datasetIds));
+    $metricsStmt->execute([$viewId, ...array_values($datasetIds), Auth::clubId()]);
 
     return [$columnSchema, $metricsStmt->fetchAll()];
 }
@@ -205,11 +211,4 @@ Reglas estrictas:
 - Si el pedido no se puede resolver con los campos editables de arriba, devolvé un objeto vacío {}.
 - Sin texto adicional, sin markdown, sin explicaciones.
 PROMPT;
-}
-
-function respondError(int $status, string $message): void
-{
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $message]);
-    exit;
 }

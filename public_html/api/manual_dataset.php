@@ -1,17 +1,13 @@
 <?php
 
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_api.php';
 require __DIR__ . '/../app/ColumnTypeDetector.php';
 
-header('Content-Type: application/json; charset=utf-8');
+// Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
+// Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
+requireAuth();
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    echo json_encode(['ok' => false, 'error' => 'Método no permitido.']);
-    exit;
-}
+requireMethod('POST');
 
 $pdo = Database::get();
 
@@ -48,9 +44,15 @@ if (empty($rowsInput)) {
     respondError(422, 'No hay filas para cargar.');
 }
 
-// Nombres reales del plantel (no confiamos en el nombre que venga del cliente).
+$clubId = Auth::clubId();
+
+// Nombres reales del plantel (no confiamos en el nombre que venga del cliente). Filtrar por club acá
+// es además la validación de los player_id que manda el cliente: los que no estén en este mapa se
+// descartan más abajo, así que un id de otro club nunca llega a insertarse.
 $players = [];
-foreach ($pdo->query('SELECT id, nombre FROM players')->fetchAll() as $p) {
+$playersStmt = $pdo->prepare('SELECT id, nombre FROM players WHERE club_id = :club');
+$playersStmt->execute(['club' => $clubId]);
+foreach ($playersStmt->fetchAll() as $p) {
     $players[(int) $p['id']] = $p['nombre'];
 }
 
@@ -88,9 +90,10 @@ $columnSchema = ColumnTypeDetector::detect($headers, array_map(fn($r) => $r['dat
 $pdo->beginTransaction();
 try {
     $pdo->prepare(
-        'INSERT INTO datasets (nombre, categoria, original_filename, column_schema, player_column_name)
-         VALUES (:nombre, :categoria, NULL, :column_schema, :player_column_name)'
+        'INSERT INTO datasets (club_id, nombre, categoria, original_filename, column_schema, player_column_name)
+         VALUES (:club_id, :nombre, :categoria, NULL, :column_schema, :player_column_name)'
     )->execute([
+        'club_id' => $clubId,
         'nombre' => $nombre,
         'categoria' => $categoria,
         'column_schema' => json_encode($columnSchema, JSON_UNESCAPED_UNICODE),
@@ -99,11 +102,12 @@ try {
     $datasetId = (int) $pdo->lastInsertId();
 
     $rowStmt = $pdo->prepare(
-        "INSERT INTO dataset_rows (dataset_id, player_id, raw_name, raw_data, match_status)
-         VALUES (:dataset_id, :player_id, :raw_name, :raw_data, 'matched')"
+        "INSERT INTO dataset_rows (club_id, dataset_id, player_id, raw_name, raw_data, match_status)
+         VALUES (:club_id, :dataset_id, :player_id, :raw_name, :raw_data, 'matched')"
     );
     foreach ($assembled as $r) {
         $rowStmt->execute([
+            'club_id' => $clubId,
             'dataset_id' => $datasetId,
             'player_id' => $r['player_id'],
             'raw_name' => $r['data']['Jugador'],
@@ -119,10 +123,3 @@ try {
 
 echo json_encode(['ok' => true, 'dataset_id' => $datasetId, 'row_count' => count($assembled)]);
 exit;
-
-function respondError(int $status, string $message): void
-{
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $message]);
-    exit;
-}

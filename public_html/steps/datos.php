@@ -1,21 +1,26 @@
 <?php
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_page.php';
+requireAuth();
 
 $pageTitle = 'Datos — SportAnalysis';
 $currentStep = 2;
 
 $pdo = Database::get();
-$datasets = $pdo->query(
+// El club va en los dos lados del LEFT JOIN: el WHERE acota los datasets listados, y la condición
+// del JOIN evita que un dataset_row de otro club infle los conteos de filas/matcheadas si alguna
+// vez se cruzaran los ids.
+$stmt = $pdo->prepare(
     'SELECT d.id, d.nombre, d.categoria, d.original_filename, d.column_schema, d.player_column_name, d.uploaded_at,
             COUNT(r.id) AS row_count,
             SUM(CASE WHEN r.match_status = "matched" THEN 1 ELSE 0 END) AS matched_count
      FROM datasets d
-     LEFT JOIN dataset_rows r ON r.dataset_id = d.id
+     LEFT JOIN dataset_rows r ON r.dataset_id = d.id AND r.club_id = d.club_id
+     WHERE d.club_id = :club
      GROUP BY d.id
      ORDER BY d.categoria, d.uploaded_at DESC'
-)->fetchAll();
+);
+$stmt->execute(['club' => Auth::clubId()]);
+$datasets = $stmt->fetchAll();
 
 $categorias = [
     'partidos' => 'Partidos',

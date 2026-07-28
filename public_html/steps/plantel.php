@@ -1,12 +1,15 @@
 <?php
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_page.php';
+requireAuth();
 
 $pageTitle = 'Plantel — SportAnalysis';
 $currentStep = 1;
 
-$players = Database::get()->query('SELECT id, nombre, familia, sub_familia FROM players ORDER BY nombre')->fetchAll();
+$stmt = Database::get()->prepare(
+    'SELECT id, nombre, familia, sub_familia FROM players WHERE club_id = :club ORDER BY nombre'
+);
+$stmt->execute(['club' => Auth::clubId()]);
+$players = $stmt->fetchAll();
 
 require __DIR__ . '/../app/views/head.php';
 $appbarAction = ['href' => 'analysis.php', 'label' => 'Ir a SportAnalysis', 'icon' => '→', 'primary' => true];
@@ -204,7 +207,15 @@ setupDropzone(dropzone, input, (files) => {
 uploadForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!selectedFile) return;
-    if (!confirm('Subir un CSV reemplaza TODO el plantel actual. ¿Continuar?')) return;
+    // El aviso menciona las vistas por jugador a propósito: `views` tiene ON DELETE CASCADE sobre
+    // player_id, así que reemplazar el plantel se lleva puestos los "Overview — Jugador" con sus
+    // widgets. Es la consecuencia menos obvia de esta acción y la que más duele descubrir después.
+    if (!confirm(
+        'Subir un CSV reemplaza TODO el plantel actual.\n\n'
+        + 'Ojo: también se eliminan las vistas individuales de jugador ("Overview — Jugador") '
+        + 'con sus widgets, porque cuelgan de los jugadores que se van a reemplazar. '
+        + 'Se pueden volver a generar desde Vistas base.\n\n¿Continuar?'
+    )) return;
 
     submitBtn.disabled = true;
     submitBtn.textContent = 'Subiendo...';
@@ -215,8 +226,14 @@ uploadForm.addEventListener('submit', async (e) => {
 
     try {
         const result = await Api.postForm('../api/players.php', formData);
-        showAlert(alertBox, `Plantel cargado: ${result.count} jugadores.`, 'success');
-        setTimeout(() => window.location.reload(), 900);
+
+        // `warning` viene del endpoint cuando el CASCADE se llevó vistas por jugador. .alert tiene
+        // white-space: pre-line, así que el \n rinde como salto sin necesidad de otra variante.
+        // Si hubo aviso damos más tiempo antes de recargar: si no, se pierde de vista al instante.
+        let msg = `Plantel cargado: ${result.count} jugadores.`;
+        if (result.warning) msg += `\n${result.warning}`;
+        showAlert(alertBox, msg, 'success');
+        setTimeout(() => window.location.reload(), result.warning ? 6000 : 900);
     } catch (err) {
         showAlert(alertBox, err.message, 'error');
         submitBtn.disabled = false;

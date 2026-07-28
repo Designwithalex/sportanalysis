@@ -2,11 +2,16 @@
 
 require_once __DIR__ . '/AnthropicClient.php';
 require_once __DIR__ . '/WidgetSchema.php';
+require_once __DIR__ . '/Auth.php';
 
 /**
  * Arma el prompt para una vista (descripcion + datasets asociados), le pide a la IA
  * una grilla de widgets dentro de la libreria fija, valida cada uno contra WidgetSchema
  * y los guarda. La IA nunca genera HTML ni código: solo este JSON de configuración.
+ *
+ * AISLAMIENTO POR CLUB: la vista, sus datasets y sus métricas se leen filtrando por el club
+ * de la sesión, así que al prompt de la IA nunca viajan columnas ni nombres de otro club.
+ * Los INSERT pasan club_id explícito (el DEFAULT 1 del esquema oculta el bug, no lo evita).
  */
 class ViewGenerator
 {
@@ -15,6 +20,16 @@ class ViewGenerator
     public function __construct(PDO $pdo)
     {
         $this->pdo = $pdo;
+    }
+
+    /** Club de la sesión. Falla fuerte si no hay: sin club no hay consulta segura. */
+    private function clubId(): int
+    {
+        $clubId = Auth::clubId();
+        if ($clubId <= 0) {
+            throw new RuntimeException('Sesión sin club: no se puede generar la vista.');
+        }
+        return $clubId;
     }
 
     /**
@@ -48,11 +63,14 @@ class ViewGenerator
         $skipped = [];
         $position = 0;
 
+        $clubId = $this->clubId();
         $insertWidget = $this->pdo->prepare(
-            'INSERT INTO widgets (view_id, type, config, position) VALUES (:view_id, :type, :config, :position)'
+            'INSERT INTO widgets (club_id, view_id, type, config, position)
+             VALUES (:club, :view_id, :type, :config, :position)'
         );
         $insertVersion = $this->pdo->prepare(
-            'INSERT INTO widget_versions (widget_id, config, source) VALUES (:widget_id, :config, "initial")'
+            'INSERT INTO widget_versions (club_id, widget_id, config, source)
+             VALUES (:club, :widget_id, :config, "initial")'
         );
 
         $this->pdo->beginTransaction();
@@ -82,6 +100,7 @@ class ViewGenerator
                 }
 
                 $insertWidget->execute([
+                    'club' => $clubId,
                     'view_id' => $viewId,
                     'type' => $type,
                     'config' => json_encode($config, JSON_UNESCAPED_UNICODE),
@@ -90,6 +109,7 @@ class ViewGenerator
                 $widgetId = (int) $this->pdo->lastInsertId();
 
                 $insertVersion->execute([
+                    'club' => $clubId,
                     'widget_id' => $widgetId,
                     'config' => json_encode($config, JSON_UNESCAPED_UNICODE),
                 ]);
@@ -112,10 +132,13 @@ class ViewGenerator
 
     private function fetchView(int $viewId): array
     {
-        $stmt = $this->pdo->prepare('SELECT id, nombre, description FROM views WHERE id = :id');
-        $stmt->execute(['id' => $viewId]);
+        $stmt = $this->pdo->prepare(
+            'SELECT id, nombre, description FROM views WHERE id = :id AND club_id = :club'
+        );
+        $stmt->execute(['id' => $viewId, 'club' => $this->clubId()]);
         $view = $stmt->fetch();
         if (!$view) {
+            // Mismo mensaje para "no existe" y "no es de tu club": no confirmamos ids ajenos.
             throw new RuntimeException('Vista no encontrada.');
         }
         return $view;
@@ -127,10 +150,10 @@ class ViewGenerator
         $stmt = $this->pdo->prepare(
             'SELECT d.id, d.nombre, d.column_schema, d.player_column_name
              FROM datasets d
-             INNER JOIN view_datasets vd ON vd.dataset_id = d.id
-             WHERE vd.view_id = :view_id'
+             INNER JOIN view_datasets vd ON vd.dataset_id = d.id AND vd.club_id = d.club_id
+             WHERE vd.view_id = :view_id AND d.club_id = :club'
         );
-        $stmt->execute(['view_id' => $viewId]);
+        $stmt->execute(['view_id' => $viewId, 'club' => $this->clubId()]);
         $datasets = $stmt->fetchAll();
         foreach ($datasets as &$d) {
             $d['column_schema'] = json_decode($d['column_schema'], true);
@@ -141,9 +164,14 @@ class ViewGenerator
     private function fetchCustomMetrics(int $viewId, int $datasetId): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT id, nombre, formula FROM custom_metrics WHERE view_id = :view_id AND dataset_id = :dataset_id'
+            'SELECT id, nombre, formula FROM custom_metrics
+             WHERE view_id = :view_id AND dataset_id = :dataset_id AND club_id = :club'
         );
-        $stmt->execute(['view_id' => $viewId, 'dataset_id' => $datasetId]);
+        $stmt->execute([
+            'view_id' => $viewId,
+            'dataset_id' => $datasetId,
+            'club' => $this->clubId(),
+        ]);
         return $stmt->fetchAll();
     }
 

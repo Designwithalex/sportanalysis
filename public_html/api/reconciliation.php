@@ -1,14 +1,16 @@
 <?php
 
-define('PL_APP', true);
-require __DIR__ . '/../app/config.php';
-require __DIR__ . '/../app/Database.php';
+require __DIR__ . '/../app/bootstrap_api.php';
 require __DIR__ . '/../app/NameMatcher.php';
 
-header('Content-Type: application/json; charset=utf-8');
+// Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
+// Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
+requireAuth();
 
 $method = $_SERVER['REQUEST_METHOD'];
 $pdo = Database::get();
+
+requireMethod(['GET', 'POST']);
 
 if ($method === 'GET') {
     handleList($pdo);
@@ -27,14 +29,15 @@ if ($method === 'POST') {
     exit;
 }
 
-http_response_code(405);
-echo json_encode(['ok' => false, 'error' => 'Método no permitido.']);
-exit;
-
 function handleList(PDO $pdo): void
 {
-    $datasets = $pdo->query('SELECT id, nombre, column_schema, player_column_name FROM datasets ORDER BY nombre')->fetchAll();
-    $players = $pdo->query('SELECT id, nombre FROM players')->fetchAll();
+    $dStmt = $pdo->prepare('SELECT id, nombre, column_schema, player_column_name FROM datasets WHERE club_id = :club ORDER BY nombre');
+    $dStmt->execute(['club' => Auth::clubId()]);
+    $datasets = $dStmt->fetchAll();
+
+    $pStmt = $pdo->prepare('SELECT id, nombre FROM players WHERE club_id = :club');
+    $pStmt->execute(['club' => Auth::clubId()]);
+    $players = $pStmt->fetchAll();
 
     $result = [];
     foreach ($datasets as $dataset) {
@@ -54,14 +57,16 @@ function handleList(PDO $pdo): void
 
         ensureReconciliations($pdo, $datasetId, $players);
 
+        // El club_id va también en el ON del LEFT JOIN: sin eso, un suggested_player_id apuntando a
+        // otro club traería el nombre de un jugador ajeno al listado.
         $stmt = $pdo->prepare(
             "SELECT nr.id, nr.raw_name, nr.suggested_player_id, p.nombre AS suggested_nombre
              FROM name_reconciliations nr
-             LEFT JOIN players p ON p.id = nr.suggested_player_id
-             WHERE nr.dataset_id = :dataset_id AND nr.resolution = 'pending'
+             LEFT JOIN players p ON p.id = nr.suggested_player_id AND p.club_id = nr.club_id
+             WHERE nr.dataset_id = :dataset_id AND nr.club_id = :club AND nr.resolution = 'pending'
              ORDER BY nr.raw_name"
         );
-        $stmt->execute(['dataset_id' => $datasetId]);
+        $stmt->execute(['dataset_id' => $datasetId, 'club' => Auth::clubId()]);
         $entry['pending'] = $stmt->fetchAll();
 
         $result[] = $entry;
@@ -75,28 +80,32 @@ function handleList(PDO $pdo): void
 /** Crea reconciliaciones "pending" para raw_names sin matchear que todavía no tienen una fila. */
 function ensureReconciliations(PDO $pdo, int $datasetId, array $players): void
 {
-    $existing = $pdo->prepare('SELECT raw_name FROM name_reconciliations WHERE dataset_id = :dataset_id');
-    $existing->execute(['dataset_id' => $datasetId]);
+    $clubId = Auth::clubId();
+
+    $existing = $pdo->prepare('SELECT raw_name FROM name_reconciliations WHERE dataset_id = :dataset_id AND club_id = :club');
+    $existing->execute(['dataset_id' => $datasetId, 'club' => $clubId]);
     $existingNames = array_flip($existing->fetchAll(PDO::FETCH_COLUMN));
 
     $unmatched = $pdo->prepare(
         "SELECT DISTINCT raw_name FROM dataset_rows
-         WHERE dataset_id = :dataset_id AND match_status = 'unmatched' AND raw_name IS NOT NULL"
+         WHERE dataset_id = :dataset_id AND club_id = :club AND match_status = 'unmatched' AND raw_name IS NOT NULL"
     );
-    $unmatched->execute(['dataset_id' => $datasetId]);
+    $unmatched->execute(['dataset_id' => $datasetId, 'club' => $clubId]);
     $rawNames = $unmatched->fetchAll(PDO::FETCH_COLUMN);
 
     $insert = $pdo->prepare(
-        'INSERT INTO name_reconciliations (dataset_id, raw_name, suggested_player_id, resolution)
-         VALUES (:dataset_id, :raw_name, :suggested_player_id, "pending")'
+        'INSERT INTO name_reconciliations (club_id, dataset_id, raw_name, suggested_player_id, resolution)
+         VALUES (:club, :dataset_id, :raw_name, :suggested_player_id, "pending")'
     );
 
     foreach ($rawNames as $rawName) {
         if (isset($existingNames[$rawName])) {
             continue;
         }
+        // $players ya viene filtrado por club desde handleList: la sugerencia no puede caer en otro club.
         $suggestion = NameMatcher::suggest($rawName, $players);
         $insert->execute([
+            'club' => $clubId,
             'dataset_id' => $datasetId,
             'raw_name' => $rawName,
             'suggested_player_id' => $suggestion['player_id'] ?? null,
@@ -113,33 +122,34 @@ function handleSetPlayerColumn(PDO $pdo): void
         respondError(400, 'Faltan datos.');
     }
 
-    $dataset = $pdo->prepare('SELECT column_schema FROM datasets WHERE id = :id');
-    $dataset->execute(['id' => $datasetId]);
-    $row = $dataset->fetch();
-    if (!$row) {
-        respondError(404, 'Dataset no encontrado.');
-    }
+    // dataset_id viene del cliente: 404 si el dataset es de otro club (antes se leía sin filtrar).
+    $row = Scope::require($pdo, 'datasets', $datasetId);
     $columns = array_keys(json_decode($row['column_schema'], true));
     if (!in_array($columnName, $columns, true)) {
         respondError(422, 'Esa columna no existe en el dataset.');
     }
 
-    $players = $pdo->query('SELECT id, nombre FROM players')->fetchAll();
+    $clubId = Auth::clubId();
+
+    $pStmt = $pdo->prepare('SELECT id, nombre FROM players WHERE club_id = :club');
+    $pStmt->execute(['club' => $clubId]);
+    $players = $pStmt->fetchAll();
     $nameIndex = NameMatcher::buildIndex($players);
 
     $pdo->beginTransaction();
     try {
-        $pdo->prepare('UPDATE datasets SET player_column_name = :col WHERE id = :id')
-            ->execute(['col' => $columnName, 'id' => $datasetId]);
+        $pdo->prepare('UPDATE datasets SET player_column_name = :col WHERE id = :id AND club_id = :club')
+            ->execute(['col' => $columnName, 'id' => $datasetId, 'club' => $clubId]);
 
         // Limpiamos reconciliaciones viejas: cambió la columna, los raw_name anteriores ya no aplican.
-        $pdo->prepare('DELETE FROM name_reconciliations WHERE dataset_id = :id')->execute(['id' => $datasetId]);
+        $pdo->prepare('DELETE FROM name_reconciliations WHERE dataset_id = :id AND club_id = :club')
+            ->execute(['id' => $datasetId, 'club' => $clubId]);
 
-        $rows = $pdo->prepare('SELECT id, raw_data FROM dataset_rows WHERE dataset_id = :id');
-        $rows->execute(['id' => $datasetId]);
+        $rows = $pdo->prepare('SELECT id, raw_data FROM dataset_rows WHERE dataset_id = :id AND club_id = :club');
+        $rows->execute(['id' => $datasetId, 'club' => $clubId]);
 
         $updateStmt = $pdo->prepare(
-            'UPDATE dataset_rows SET raw_name = :raw_name, player_id = :player_id, match_status = :match_status WHERE id = :id'
+            'UPDATE dataset_rows SET raw_name = :raw_name, player_id = :player_id, match_status = :match_status WHERE id = :id AND club_id = :club'
         );
 
         foreach ($rows->fetchAll() as $row) {
@@ -152,6 +162,7 @@ function handleSetPlayerColumn(PDO $pdo): void
                 'player_id' => $playerId,
                 'match_status' => $playerId !== null ? 'matched' : 'unmatched',
                 'id' => $row['id'],
+                'club' => $clubId,
             ]);
         }
 
@@ -179,35 +190,42 @@ function handleResolve(PDO $pdo): void
         respondError(400, 'Falta el jugador a asignar.');
     }
 
-    $recon = $pdo->prepare('SELECT * FROM name_reconciliations WHERE id = :id');
-    $recon->execute(['id' => $id]);
-    $row = $recon->fetch();
-    if (!$row) {
-        respondError(404, 'Reconciliación no encontrada.');
-    }
+    // El id de la reconciliación viene del cliente (cadena name_reconciliations → datasets): 404 si
+    // no es de este club, antes de que su dataset_id viaje al UPDATE de dataset_rows de abajo.
+    $row = Scope::require($pdo, 'name_reconciliations', $id);
 
     if ($resolution === 'confirmed') {
         $resolvedPlayerId = (int) $row['suggested_player_id'];
     }
+    // 'manual': el jugador lo elige el cliente. Sin validar, se podía asignar una fila a un jugador
+    // de otro club (fk_dataset_rows_player es ON DELETE SET NULL, no se puede volver compuesta).
+    // 'confirmed' pasa por acá también: la sugerencia pudo quedar de antes del scoping.
+    if ($resolvedPlayerId !== null) {
+        Scope::require($pdo, 'players', $resolvedPlayerId);
+    }
+
+    $clubId = Auth::clubId();
 
     $pdo->beginTransaction();
     try {
         $pdo->prepare(
-            'UPDATE name_reconciliations SET resolution = :resolution, resolved_player_id = :resolved_player_id, resolved_at = NOW() WHERE id = :id'
+            'UPDATE name_reconciliations SET resolution = :resolution, resolved_player_id = :resolved_player_id, resolved_at = NOW() WHERE id = :id AND club_id = :club'
         )->execute([
             'resolution' => $resolution,
             'resolved_player_id' => $resolvedPlayerId,
             'id' => $id,
+            'club' => $clubId,
         ]);
 
         $matchStatus = $resolution === 'discarded' ? 'discarded' : 'matched';
         $pdo->prepare(
             'UPDATE dataset_rows SET player_id = :player_id, match_status = :match_status
-             WHERE dataset_id = :dataset_id AND raw_name = :raw_name'
+             WHERE dataset_id = :dataset_id AND club_id = :club AND raw_name = :raw_name'
         )->execute([
             'player_id' => $resolution === 'discarded' ? null : $resolvedPlayerId,
             'match_status' => $matchStatus,
             'dataset_id' => $row['dataset_id'],
+            'club' => $clubId,
             'raw_name' => $row['raw_name'],
         ]);
 
@@ -218,11 +236,4 @@ function handleResolve(PDO $pdo): void
     }
 
     echo json_encode(['ok' => true]);
-}
-
-function respondError(int $status, string $message): void
-{
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $message]);
-    exit;
 }

@@ -4,6 +4,7 @@ require_once __DIR__ . '/AnthropicClient.php';
 require_once __DIR__ . '/WidgetSchema.php';
 require_once __DIR__ . '/WidgetRenderer.php';
 require_once __DIR__ . '/Database.php';
+require_once __DIR__ . '/Auth.php';
 
 /**
  * Genera UN widget a partir de un nombre + prompt en lenguaje natural del preparador físico.
@@ -14,6 +15,10 @@ require_once __DIR__ . '/Database.php';
  * (config.dataset_ids). Si el pedido es ambiguo, en vez de un widget devuelve preguntas para
  * guiar al PF (flujo multi-turno). Su único output sigue siendo JSON de configuración: nunca
  * genera HTML ni código, y todo widget se valida contra WidgetSchema antes de devolverse.
+ *
+ * AISLAMIENTO POR CLUB: el catálogo que se le describe a la IA sale filtrado por el club de la
+ * sesión (nunca viajan al prompt datasets ni columnas de otro club), y los dataset_ids que la IA
+ * elige se re-validan contra ese mismo club antes de devolver el widget.
  */
 class WidgetBuilder
 {
@@ -22,6 +27,16 @@ class WidgetBuilder
     public function __construct(PDO $pdo)
     {
         $this->pdo = $pdo;
+    }
+
+    /** Club de la sesión. Falla fuerte si no hay: sin club no hay consulta segura. */
+    private function clubId(): int
+    {
+        $clubId = Auth::clubId();
+        if ($clubId <= 0) {
+            throw new RuntimeException('Sesión sin club: no se puede armar el widget.');
+        }
+        return $clubId;
     }
 
     /**
@@ -92,9 +107,15 @@ class WidgetBuilder
             return ['status' => 'error', 'error' => 'El widget generado no indica ningún dataset.'];
         }
 
+        $clubId = $this->clubId();
         $placeholders = implode(',', array_fill(0, count($datasetIds), '?'));
-        $stmt = $this->pdo->prepare("SELECT column_schema FROM datasets WHERE id IN ($placeholders)");
-        $stmt->execute($datasetIds);
+
+        // El filtro por club hace doble función: acota el schema y, junto al conteo de abajo,
+        // rechaza cualquier dataset_id ajeno que se haya colado en la config.
+        $stmt = $this->pdo->prepare(
+            "SELECT column_schema FROM datasets WHERE id IN ($placeholders) AND club_id = ?"
+        );
+        $stmt->execute([...$datasetIds, $clubId]);
         $found = $stmt->fetchAll();
         if (count($found) !== count($datasetIds)) {
             return ['status' => 'error', 'error' => 'La IA eligió un dataset que no existe.'];
@@ -103,9 +124,10 @@ class WidgetBuilder
         $effectiveSchema = WidgetSchema::effectiveSchema($schemas);
 
         $metricsStmt = $this->pdo->prepare(
-            "SELECT id, nombre FROM custom_metrics WHERE view_id = ? AND dataset_id IN ($placeholders)"
+            "SELECT id, nombre FROM custom_metrics
+             WHERE view_id = ? AND dataset_id IN ($placeholders) AND club_id = ?"
         );
-        $metricsStmt->execute(array_merge([$viewId], $datasetIds));
+        $metricsStmt->execute([$viewId, ...$datasetIds, $clubId]);
         $customMetrics = $metricsStmt->fetchAll();
 
         $errors = WidgetSchema::validate($type, $config, $effectiveSchema, $customMetrics);
@@ -123,9 +145,13 @@ class WidgetBuilder
     /** @return array<int,array{id:int,nombre:string,categoria:string,column_schema:array}> */
     private function fetchDatasets(): array
     {
-        $datasets = $this->pdo->query(
-            'SELECT id, nombre, categoria, column_schema FROM datasets ORDER BY categoria, uploaded_at'
-        )->fetchAll();
+        // query() no admite parámetros: pasa a prepare() para poder acotar por club.
+        $stmt = $this->pdo->prepare(
+            'SELECT id, nombre, categoria, column_schema FROM datasets
+             WHERE club_id = :club ORDER BY categoria, uploaded_at'
+        );
+        $stmt->execute(['club' => $this->clubId()]);
+        $datasets = $stmt->fetchAll();
         foreach ($datasets as &$d) {
             $d['id'] = (int) $d['id'];
             $d['column_schema'] = json_decode($d['column_schema'], true);
@@ -143,9 +169,10 @@ class WidgetBuilder
     private function emptyColumns(int $datasetId, array $columnSchema): array
     {
         $stmt = $this->pdo->prepare(
-            "SELECT raw_data FROM dataset_rows WHERE dataset_id = :id AND match_status = 'matched' LIMIT 300"
+            "SELECT raw_data FROM dataset_rows
+             WHERE dataset_id = :id AND club_id = :club AND match_status = 'matched' LIMIT 300"
         );
-        $stmt->execute(['id' => $datasetId]);
+        $stmt->execute(['id' => $datasetId, 'club' => $this->clubId()]);
         $rows = array_map(fn($r) => json_decode($r, true) ?: [], $stmt->fetchAll(PDO::FETCH_COLUMN));
         if (empty($rows)) {
             return [];
