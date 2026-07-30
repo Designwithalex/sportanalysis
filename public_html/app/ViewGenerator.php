@@ -3,6 +3,7 @@
 require_once __DIR__ . '/AnthropicClient.php';
 require_once __DIR__ . '/WidgetSchema.php';
 require_once __DIR__ . '/Auth.php';
+require_once __DIR__ . '/Scope.php';
 
 /**
  * Arma el prompt para una vista (descripcion + datasets asociados), le pide a la IA
@@ -12,6 +13,10 @@ require_once __DIR__ . '/Auth.php';
  * AISLAMIENTO POR CLUB: la vista, sus datasets y sus métricas se leen filtrando por el club
  * de la sesión, así que al prompt de la IA nunca viajan columnas ni nombres de otro club.
  * Los INSERT pasan club_id explícito (el DEFAULT 1 del esquema oculta el bug, no lo evita).
+ *
+ * SEGUNDO EJE (usuario): fetchView() aplica además el predicado de visibilidad de vistas, así que
+ * una vista privada de otro usuario del mismo club tampoco se puede generar. El permiso de
+ * ESCRITURA sobre una vista del club (solo admin_club) lo aplica api/generate.php, el único caller.
  */
 class ViewGenerator
 {
@@ -132,13 +137,22 @@ class ViewGenerator
 
     private function fetchView(int $viewId): array
     {
+        // Mismo predicado de visibilidad que Scope, escrito una sola vez en sqlVistaVisible():
+        // club + (vista del club O mía). Una vista privada de OTRO usuario del mismo club no se
+        // puede leer ni generar desde acá, aunque el club coincida.
         $stmt = $this->pdo->prepare(
-            'SELECT id, nombre, description FROM views WHERE id = :id AND club_id = :club'
+            'SELECT v.id, v.nombre, v.description FROM views v
+             WHERE v.id = :id AND v.club_id = :club AND ' . Scope::sqlVistaVisible()
         );
-        $stmt->execute(['id' => $viewId, 'club' => $this->clubId()]);
+        $stmt->execute([
+            'id' => $viewId,
+            'club' => $this->clubId(),
+            'user' => Auth::userId(),
+        ]);
         $view = $stmt->fetch();
         if (!$view) {
-            // Mismo mensaje para "no existe" y "no es de tu club": no confirmamos ids ajenos.
+            // Mismo mensaje para "no existe", "no es de tu club" y "es privada de otro": no
+            // confirmamos ids ajenos.
             throw new RuntimeException('Vista no encontrada.');
         }
         return $view;

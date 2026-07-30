@@ -27,6 +27,11 @@ require_once __DIR__ . '/Auth.php';
  * cross-club disparada por un botón normal de la UI. Por eso todas las sentencias de acá, sin
  * excepción, llevan club_id: los SELECT/UPDATE/DELETE en el WHERE y los INSERT como valor
  * explícito (el `DEFAULT 1` del esquema no protege, oculta).
+ *
+ * VISTAS BASE = VISTAS DEL CLUB (`views.user_id IS NULL`). Nacen y se buscan siempre con user_id
+ * NULL: las ven todos los miembros y solo un admin_club las puede generar (el gate está en
+ * api/base_views.php, que es el único caller). Los SELECT de upsertView() repiten `user_id IS NULL`
+ * por la misma razón que repiten club_id: son el target de tres DELETE.
  */
 class BaseViewGenerator
 {
@@ -256,17 +261,28 @@ PROMPT;
         $this->pdo->beginTransaction();
         try {
             // ¿existe ya una vista base para esta clave? → la reusamos y limpiamos su contenido.
+            //
             // El `AND club_id` no es opcional: lo que sale de acá es el target de los tres DELETE
             // de abajo. Sin él, con dos clubes con datasets en la misma categoría, el LIMIT 1
             // podía devolver la vista del OTRO club y borrarle todo el contenido.
+            //
+            // El `AND user_id IS NULL` es ese MISMO bug reencarnado cross-USUARIO, y por eso va
+            // aunque hoy sea inocuo: las vistas base son del club (user_id NULL) y ninguna vista
+            // privada puede tener tipo != 'manual', así que hoy el LIMIT 1 no puede engancharse una
+            // privada. El día que exista una vista privada con tipo 'cluster'/'player', sin este
+            // filtro los DELETE de abajo le vacían la vista a otro usuario.
+            //
+            // Ojo: esto NO es el predicado de visibilidad de Scope::sqlVistaVisible() (que sería
+            // "del club O mía"). Acá se quiere estrictamente "del club": una vista base nunca es
+            // privada, ni siquiera la propia.
             if (isset($key['categoria'])) {
                 $sel = $this->pdo->prepare(
-                    'SELECT id FROM views WHERE tipo = "cluster" AND categoria = ? AND club_id = ? LIMIT 1'
+                    'SELECT id FROM views WHERE tipo = "cluster" AND categoria = ? AND club_id = ? AND user_id IS NULL LIMIT 1'
                 );
                 $sel->execute([$key['categoria'], $clubId]);
             } else {
                 $sel = $this->pdo->prepare(
-                    'SELECT id FROM views WHERE tipo = "player" AND player_id = ? AND club_id = ? LIMIT 1'
+                    'SELECT id FROM views WHERE tipo = "player" AND player_id = ? AND club_id = ? AND user_id IS NULL LIMIT 1'
                 );
                 $sel->execute([$key['player_id'], $clubId]);
             }
@@ -284,14 +300,22 @@ PROMPT;
             } else {
                 // La posición es por club: contar sobre todas las vistas de la base dejaría las
                 // tabs nuevas arrancando en posiciones absurdas.
+                //
+                // Y entre las del club, solo las BASE (user_id NULL). `views.position` es ahora el
+                // orden POR DEFECTO compartido — el orden real de cada usuario vive en view_order —
+                // así que mirar las privadas de terceros para ubicar una vista que ven todos no
+                // significa nada, y encima haría depender el default de cuántas vistas se armó otro.
+                // Colisionar con la position de una privada es inocuo: el orden desempata por id.
                 $posStmt = $this->pdo->prepare(
-                    'SELECT COALESCE(MAX(position), -1) + 1 FROM views WHERE club_id = ?'
+                    'SELECT COALESCE(MAX(position), -1) + 1 FROM views WHERE club_id = ? AND user_id IS NULL'
                 );
                 $posStmt->execute([$clubId]);
                 $pos = (int) $posStmt->fetchColumn();
+                // `user_id` explícito en NULL, igual que club_id: una vista base es del CLUB y eso
+                // tiene que leerse en el INSERT, no deducirse del default de la columna.
                 $this->pdo->prepare(
-                    'INSERT INTO views (club_id, nombre, tipo, categoria, player_id, description, position)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)'
+                    'INSERT INTO views (club_id, user_id, nombre, tipo, categoria, player_id, description, position)
+                     VALUES (?, NULL, ?, ?, ?, ?, ?, ?)'
                 )->execute([
                     $clubId,
                     $nombre,

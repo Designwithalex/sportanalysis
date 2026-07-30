@@ -301,7 +301,11 @@ select {
     font-size: 11.5px;
     font-family: var(--font-mono);
     background: var(--signal-wash);
-    color: var(--signal);
+    /* --signal-strong y no --signal: el wash al 12% sube el fondo del pill a ~#dbe6e8, y ahí
+       --signal da 3.75:1 sobre --bg / 4.10:1 sobre --surface. A 11.5px no es "large text", así
+       que hace falta 4.5:1. --signal-strong da 5.51 / 6.01. En dark el token ya es más claro que
+       --signal, así que el cambio también sube el contraste ahí. */
+    color: var(--signal-strong);
 }
 
 /* Alerts */
@@ -363,7 +367,7 @@ select {
 
 .badge-back {
     background: var(--signal-wash);
-    color: var(--signal);
+    color: var(--signal-strong);   /* mismo motivo que .tag: 11.5px sobre wash necesita 4.5:1 */
 }
 
 .badge-forward {
@@ -518,14 +522,6 @@ button.view-tab-players {
     color: var(--accent-strong);
     background: var(--signal-wash);
 }
-
-/* CTA de vistas base en el paso Datos */
-.base-cta-card {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: var(--space-4); flex-wrap: wrap;
-    border-color: var(--accent);
-}
-.base-cta-card .btn { flex: 0 0 auto; }
 
 /* ---- Modal de vistas base ---- */
 .base-cluster-chips { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1099,7 +1095,7 @@ button.view-tab-players {
     font-family: var(--font-mono);
     font-size: 10.5px;
     font-weight: 500;
-    color: var(--accent);
+    color: var(--accent-strong);   /* 10.5px sobre wash: --accent da 3.75:1, no llega a AA */
     text-transform: uppercase;
     letter-spacing: 0.12em;
     padding: 2px 7px;

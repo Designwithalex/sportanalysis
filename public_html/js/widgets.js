@@ -204,6 +204,14 @@ function renderWidgetCard(widget) {
         loadWidgets();
     });
 
+    // Vista del club + usuario sin permiso de admin: TODO lo que vive en .widget-controls
+    // (arrastrar, Editar, Modificar con IA, Duplicar, Deshacer, Eliminar) termina en 403 del lado
+    // del servidor — api/widgets.php, api/build_widget.php y api/ai_patch_widget.php validan por
+    // vista, no solo por widget. Se saca el bloque entero acá, después de armar la card y antes de
+    // setupCardDrag(), que ya sabe salir solo si no encuentra el handle. El resto del render
+    // (gráfico, tabla, selector de escala %) no cambia: la vista se lee igual, solo no se edita.
+    if (!canEditActiveView()) card.querySelector('.widget-controls')?.remove();
+
     setupCardDrag(card);
 
     // Entrada escalonada (el CSS define el keyframe; acá sólo el retardo por índice, con tope).
@@ -1108,6 +1116,40 @@ function setupPromptModal() {
 
 // ---------- Vistas: crear / renombrar / eliminar ----------
 
+// Los flags de permiso los emite steps/analysis.php:
+//   IS_CLUB_ADMIN         — admin_club o superadmin.
+//   ACTIVE_VIEW_IS_CLUB   — la vista abierta es base del club (la ven todos) o privada.
+//   CAN_EDIT_ACTIVE_VIEW  — puede renombrarla/eliminarla (propia siempre; del club solo el admin).
+//
+// El default cuando no llegan es PERMISIVO a propósito. Esto no es control de acceso: el servidor
+// valida el permiso en cada endpoint y devuelve un error legible. Un default restrictivo por una
+// constante que no se emitió le rompería la pantalla a un admin_club en silencio, que es peor que
+// ofrecer un botón que el servidor va a rechazar con un mensaje claro.
+function isClubAdmin() {
+    return typeof IS_CLUB_ADMIN === 'undefined' ? true : IS_CLUB_ADMIN;
+}
+function canEditActiveView() {
+    return typeof CAN_EDIT_ACTIVE_VIEW === 'undefined' ? true : CAN_EDIT_ACTIVE_VIEW;
+}
+function activeViewIsClub() {
+    return typeof ACTIVE_VIEW_IS_CLUB === 'undefined' ? false : ACTIVE_VIEW_IS_CLUB;
+}
+
+const VIEW_PERMISSION_MSG = 'Es una vista del club: solo un administrador del club puede renombrarla o eliminarla. Sobre tus vistas propias podés hacer todo.';
+const BASE_VIEWS_PERMISSION_MSG = 'Las vistas base del club las genera un administrador. Pedile a un administrador de tu club que las genere.';
+
+// Avisos a nivel vista. En el estado vacío (club sin vistas todavía) #alert-box no existe y
+// showAlert() explotaría con null: antes que perder el mensaje del servidor, cae a un alert().
+function showViewAlert(message, type = 'error') {
+    const box = document.getElementById('alert-box');
+    if (box) {
+        showAlert(box, message, type);
+        if (message) box.scrollIntoView({ block: 'nearest' });
+        return;
+    }
+    if (message) window.alert(message);
+}
+
 function setupViewModal() {
     const modal = document.getElementById('view-modal');
     const nameInput = document.getElementById('view-name-input');
@@ -1127,6 +1169,9 @@ function setupViewModal() {
     };
     const openRename = () => {
         if (typeof ACTIVE_VIEW_ID === 'undefined' || !ACTIVE_VIEW_ID) return;
+        // El ítem del menú ya viene deshabilitado desde el servidor; esto cubre el otro camino
+        // (doble click en la tab activa), que no tiene estado visual de "no podés".
+        if (!canEditActiveView()) { showViewAlert(VIEW_PERMISSION_MSG); return; }
         idInput.value = ACTIVE_VIEW_ID;
         nameInput.value = (typeof ACTIVE_VIEW_NAME !== 'undefined') ? ACTIVE_VIEW_NAME : '';
         title.textContent = 'Renombrar vista';
@@ -1169,12 +1214,19 @@ function setupViewModal() {
     });
 
     document.getElementById('delete-view-btn')?.addEventListener('click', async () => {
-        if (!confirm('¿Eliminar esta vista y todos sus widgets? No se puede deshacer.')) return;
+        if (!canEditActiveView()) { showViewAlert(VIEW_PERMISSION_MSG); return; }
+        // Borrar una vista del club se la borra a todo el mundo: el confirm lo dice.
+        const pregunta = activeViewIsClub()
+            ? '¿Eliminar esta vista del club y todos sus widgets? La pierde todo el club y no se puede deshacer.'
+            : '¿Eliminar esta vista y todos sus widgets? No se puede deshacer.';
+        if (!confirm(pregunta)) return;
         try {
             await Api.del(`../api/views.php?id=${ACTIVE_VIEW_ID}`);
             window.location.href = 'analysis.php';
         } catch (err) {
-            showAlert(document.getElementById('alert-box'), err.message, 'error');
+            // Api tira Error(data.error) con el texto del servidor: se muestra tal cual, no un
+            // "ocurrió un error" que no le dice nada a nadie.
+            showViewAlert(err.message);
         }
     });
 }
@@ -1207,6 +1259,9 @@ function setupViewTabsDrag() {
     });
 }
 
+// El orden de las tabs es una PREFERENCIA DE USUARIO (tabla view_order), no un dato del club: cada
+// uno acomoda las suyas y las del club como quiera, sin pisarle el orden a nadie. Por eso el drag
+// NO se gatea por permiso — un miembro común puede reordenar tabs de vistas del club.
 async function persistViewOrder() {
     const nav = document.getElementById('view-tabs');
     if (!nav) return;
@@ -1218,7 +1273,9 @@ async function persistViewOrder() {
     try {
         await Api.postForm('../api/views.php', fd);
     } catch (err) {
-        showAlert(document.getElementById('alert-box'), 'No se pudo guardar el orden de las vistas: ' + err.message, 'error');
+        // err.message es el texto que mandó el servidor (Api tira Error(data.error)): se muestra
+        // completo, precedido de qué se estaba intentando hacer.
+        showViewAlert('No se pudo guardar el orden de las vistas: ' + err.message);
     }
 }
 
@@ -1242,6 +1299,10 @@ function setupBaseModal() {
     }
 
     function openModal() {
+        // Generar las vistas base reescribe el tablero de todo el club: solo admin_club. Los
+        // disparadores (#gen-base-btn, #gen-base-btn-empty) ni se renderizan para un miembro;
+        // esto cubre el ?base_views=1 pegado a mano y cualquier link viejo.
+        if (!isClubAdmin()) { showViewAlert(BASE_VIEWS_PERMISSION_MSG); return; }
         showAlert(alertBox, null);
         document.querySelector('input[name="base-mode"][value="auto"]').checked = true;
         document.getElementById('base-cluster-chips').innerHTML = BASE_CLUSTERS.length
@@ -1362,7 +1423,9 @@ function setupBaseModal() {
         });
     }
 
-    if (typeof OPEN_BASE_VIEWS !== 'undefined' && OPEN_BASE_VIEWS) openModal();
+    // ?base_views=1 abre el modal directo. Para un miembro no abre nada y no dispara ningún aviso:
+    // no llegó pidiendo esto, llegó por un link. La pantalla ya le explica a quién pedírselas.
+    if (typeof OPEN_BASE_VIEWS !== 'undefined' && OPEN_BASE_VIEWS && isClubAdmin()) openModal();
 }
 
 // ---------- AI patch modal ----------

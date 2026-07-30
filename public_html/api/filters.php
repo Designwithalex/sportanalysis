@@ -1,6 +1,7 @@
 <?php
 
 require __DIR__ . '/../app/bootstrap_api.php';
+require __DIR__ . '/../app/ViewPermission.php';
 
 // Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
 // Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
@@ -50,8 +51,9 @@ if ($method === 'POST') {
     }
 
     // view_id viene del cliente y viaja a un INSERT: sin esto se podía colgar un filtro de la vista
-    // de otro club (y con eso alterar lo que ese club ve en su dashboard).
-    Scope::require($pdo, 'views', $viewId);
+    // de otro club (y con eso alterar lo que ese club ve en su dashboard). El filtro global recorta
+    // lo que TODOS los widgets de la vista muestran: sobre una vista del club, solo un admin.
+    requireEditarVistaId($pdo, $viewId);
 
     $config = json_encode(['operator' => $operator, 'value' => $value], JSON_UNESCAPED_UNICODE);
 
@@ -76,7 +78,9 @@ if ($method === 'DELETE') {
         respondError(400, 'Falta id.');
     }
     // Cadena view_filters → views. El id llega del cliente: 404 si el filtro es de otro club.
-    Scope::require($pdo, 'view_filters', $id);
+    $filter = Scope::require($pdo, 'view_filters', $id);
+    // Sacar el filtro cambia lo que ve todo el club si la vista es del club: solo un admin.
+    requireEditarVistaId($pdo, (int) $filter['view_id']);
     $pdo->prepare('DELETE FROM view_filters WHERE id = :id AND club_id = :club')
         ->execute(['id' => $id, 'club' => Auth::clubId()]);
     echo json_encode(['ok' => true]);

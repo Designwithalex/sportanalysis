@@ -47,15 +47,10 @@ require __DIR__ . '/../app/views/appbar.php';
         <p class="page-sub">Subí cada partido, entrenamiento o test como su propio CSV, dentro de una de las categorías. Después, en SportAnalysis, la IA cruza los que necesites (ej: promediar entre varios partidos). Los datos se guardan crudos.</p>
     </div>
 
-    <?php if (!empty($datasets)): ?>
-        <div class="card base-cta-card">
-            <div>
-                <div class="card-title">✦ Generá tus vistas base con IA</div>
-                <div class="card-sub" style="margin-bottom:0;">Ya tenés datos cargados. Dejá que la IA arme un tablero por cada tipo de dato (partidos, entrenamientos, fuerza…) más un overview por jugador. Podés hacerlo automático o guiándola vos.</div>
-            </div>
-            <a class="btn" href="analysis.php?base_views=1"><span class="btn-spark" aria-hidden="true">✦</span> Generar vistas base →</a>
-        </div>
-    <?php endif; ?>
+    <!-- El CTA de "Generá tus vistas base con IA" vivía acá y se fue: la generación es una acción
+         del club, no de Configuración, y solo un admin_club puede correrla. Ahora vive en
+         steps/analysis.php (estado vacío + menú ⋯). El parámetro analysis.php?base_views=1 sigue
+         abriendo ese modal directo, por si quedó algún link viejo dando vueltas. -->
 
     <div class="card">
         <div class="card-title">Subir datos</div>

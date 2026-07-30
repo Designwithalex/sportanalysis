@@ -7,6 +7,20 @@ require __DIR__ . '/../app/BaseViewGenerator.php';
 // Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
 requireAuth();
 
+// Las vistas base (tipo 'cluster' y 'player') son DEL CLUB: filas compartidas por todos los
+// miembros, con user_id NULL. Regenerarlas no es aditivo — BaseViewGenerator::upsertView() hace un
+// UPDATE y tres DELETE sobre widgets, view_datasets y view_filters de la vista existente. Sin este
+// gate, cualquier miembro le vaciaba el tablero a todo el club desde un botón normal de la UI.
+//
+// Cubre las tres acciones, 'suggest' incluida: es el primer paso del mismo asistente y cuesta una
+// llamada a la IA que solo tiene sentido si después se puede generar.
+//
+// esAdminClub() y no requireNivel('admin_club'): requireNivel compara EXACTO y dejaría afuera al
+// superadmin.
+if (!Auth::esAdminClub()) {
+    respondError(403, 'Las vistas base son del club: solo un administrador puede generarlas.');
+}
+
 // Generar vistas base implica llamadas largas a la IA (~30-60s cada una) más reintentos con backoff.
 // Subimos el límite de ejecución para que no corte a mitad de camino (Hostinger suele permitirlo).
 @set_time_limit(180);

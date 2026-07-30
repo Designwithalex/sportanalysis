@@ -1,6 +1,7 @@
 <?php
 
 require __DIR__ . '/../app/bootstrap_api.php';
+require __DIR__ . '/../app/ViewPermission.php';
 
 // Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
 // Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
@@ -9,12 +10,9 @@ requireAuth();
 $method = $_SERVER['REQUEST_METHOD'];
 $pdo = Database::get();
 
-requireMethod(['GET', 'POST', 'DELETE']);
-
-if ($method === 'GET') {
-    handleList($pdo);
-    exit;
-}
+// Sin GET: el listado JSON de vistas no tenía un solo caller (ni en js/ ni en steps/) y se borró
+// en vez de arrastrarlo al modelo por usuario. Las tabs las renderiza steps/analysis.php.
+requireMethod(['POST', 'DELETE']);
 
 if ($method === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -33,28 +31,6 @@ if ($method === 'DELETE') {
     exit;
 }
 
-function handleList(PDO $pdo): void
-{
-    $stmt = $pdo->prepare('SELECT id, nombre, description, created_at FROM views WHERE club_id = :club ORDER BY created_at DESC');
-    $stmt->execute(['club' => Auth::clubId()]);
-    $views = $stmt->fetchAll();
-
-    // club_id se repite en las tres tablas del JOIN a propósito: alcanza con que una sola quede sin
-    // filtrar para que se filtre el nombre de un dataset ajeno.
-    $datasetStmt = $pdo->prepare(
-        'SELECT d.id, d.nombre FROM datasets d
-         INNER JOIN view_datasets vd ON vd.dataset_id = d.id AND vd.club_id = d.club_id
-         WHERE vd.view_id = :view_id AND vd.club_id = :club AND d.club_id = :club2'
-    );
-
-    foreach ($views as &$view) {
-        $datasetStmt->execute(['view_id' => $view['id'], 'club' => Auth::clubId(), 'club2' => Auth::clubId()]);
-        $view['datasets'] = $datasetStmt->fetchAll();
-    }
-
-    echo json_encode(['ok' => true, 'views' => $views]);
-}
-
 function handleSave(PDO $pdo): void
 {
     $id = (int) ($_POST['id'] ?? 0);
@@ -66,14 +42,17 @@ function handleSave(PDO $pdo): void
 
     // Ambos vienen del cliente. La vista, porque el UPDATE de abajo apuntaría a una ajena; los
     // datasets, porque viajan a un INSERT en view_datasets (donde no hay WHERE que los filtre).
+    // En la rama de update va además el permiso de escritura: una vista del club la ven todos,
+    // pero solo un admin la edita.
     if ($id > 0) {
-        Scope::require($pdo, 'views', $id);
+        requireEditarVistaId($pdo, $id);
     }
     if (!empty($datasetIds)) {
         Scope::requireAll($pdo, 'datasets', $datasetIds);
     }
 
     $clubId = Auth::clubId();
+    $userId = Auth::userId();
 
     $pdo->beginTransaction();
     try {
@@ -82,16 +61,38 @@ function handleSave(PDO $pdo): void
             $stmt->execute(['nombre' => $nombre, 'description' => $description, 'id' => $id, 'club' => $clubId]);
         } else {
             if ($nombre === '') {
-                $cStmt = $pdo->prepare('SELECT COUNT(*) FROM views WHERE club_id = :club');
-                $cStmt->execute(['club' => $clubId]);
+                // Solo las vistas VISIBLES para este usuario. Contando todo el club, dos usuarios
+                // generaban "Vista N" con el mismo N, y el número no significaba nada para quien
+                // lo lee: incluía privadas ajenas que nunca va a ver en sus tabs.
+                $cStmt = $pdo->prepare(
+                    'SELECT COUNT(*) FROM views v WHERE v.club_id = :club AND ' . Scope::sqlVistaVisible()
+                );
+                $cStmt->execute(['club' => $clubId, 'user' => $userId]);
                 $count = (int) $cStmt->fetchColumn();
                 $nombre = 'Vista ' . ($count + 1);
             }
-            $pStmt = $pdo->prepare('SELECT COALESCE(MAX(position), -1) + 1 FROM views WHERE club_id = :club');
-            $pStmt->execute(['club' => $clubId]);
+            // Misma historia con la posición por defecto: "al final" es al final de las tabs que
+            // ESTE usuario ve. (El orden real, si reordenó, vive en view_order — ver handleReorder.)
+            $pStmt = $pdo->prepare(
+                'SELECT COALESCE(MAX(v.position), -1) + 1 FROM views v WHERE v.club_id = :club AND ' . Scope::sqlVistaVisible()
+            );
+            $pStmt->execute(['club' => $clubId, 'user' => $userId]);
             $pos = (int) $pStmt->fetchColumn();
-            $stmt = $pdo->prepare('INSERT INTO views (club_id, nombre, description, position) VALUES (:club, :nombre, :description, :position)');
-            $stmt->execute(['club' => $clubId, 'nombre' => $nombre, 'description' => $description, 'position' => $pos]);
+
+            // ÚNICO lugar del sistema donde nace una vista privada. `user_id` explícito y siempre
+            // el de la sesión: una vista creada a mano nace privada, sin excepción. Las vistas del
+            // club (user_id NULL) las crea solamente BaseViewGenerator.
+            $stmt = $pdo->prepare(
+                'INSERT INTO views (club_id, user_id, nombre, description, position)
+                 VALUES (:club, :user, :nombre, :description, :position)'
+            );
+            $stmt->execute([
+                'club' => $clubId,
+                'user' => $userId,
+                'nombre' => $nombre,
+                'description' => $description,
+                'position' => $pos,
+            ]);
             $id = (int) $pdo->lastInsertId();
         }
 
@@ -122,15 +123,29 @@ function handleRename(PDO $pdo): void
     if ($id <= 0 || $nombre === '') {
         respondError(400, 'Falta el id o el nombre.');
     }
-    Scope::require($pdo, 'views', $id);
+    // Renombrar una vista del club se lo renombra a todo el club: solo un admin.
+    requireEditarVistaId($pdo, $id);
     $stmt = $pdo->prepare('UPDATE views SET nombre = :nombre WHERE id = :id AND club_id = :club');
     $stmt->execute(['nombre' => $nombre, 'id' => $id, 'club' => Auth::clubId()]);
     echo json_encode(['ok' => true, 'id' => $id, 'nombre' => $nombre]);
 }
 
 /**
- * Persiste el orden manual de las vistas (tabs). Recibe ids[] en el orden nuevo y les asigna
- * posiciones 0..n. Solo toca las vistas enviadas; el resto conserva su posición.
+ * Persiste el orden de tabs DE ESTE USUARIO. Recibe ids[] en el orden nuevo.
+ *
+ * Escribe en `view_order (user_id, view_id, position)` y NUNCA más en `views.position`. Sobre una
+ * sola columna compartida el reorder estaba roto de dos formas a la vez:
+ *
+ *   · El cliente manda solo las tabs QUE VE. Numerar esa lista 0..n pisaba la `position` de las
+ *     vistas privadas de OTROS usuarios, que nunca aparecen en ella.
+ *   · Las vistas base son filas compartidas por el club: arrastrar una tab le reacomodaba el
+ *     dashboard a todos los miembros.
+ *
+ * `views.position` queda como el orden POR DEFECTO (el que fija BaseViewGenerator al crear las
+ * vistas base), para el usuario que todavía no reordenó nada.
+ *
+ * Sin chequeo de admin a propósito: reordenar es una preferencia personal. Incluso sobre las tabs
+ * del club, el efecto no sale de la propia fila de view_order del usuario.
  */
 function handleReorder(PDO $pdo): void
 {
@@ -138,14 +153,21 @@ function handleReorder(PDO $pdo): void
     if (!is_array($ids) || empty($ids)) {
         respondError(400, 'Faltan los ids.');
     }
-    // Lista de ids arbitraria del cliente: falla en bloque si alguno no es de este club.
-    Scope::requireAll($pdo, 'views', $ids);
+    // Lista arbitraria del cliente: falla en bloque si alguna vista no es visible para la sesión
+    // (otro club, o privada de otro usuario). Devuelve los ids ya normalizados a int, sin
+    // duplicados y en el mismo orden: es exactamente lo que hay que numerar.
+    $ids = Scope::requireAll($pdo, 'views', $ids);
 
-    $stmt = $pdo->prepare('UPDATE views SET position = :position WHERE id = :id AND club_id = :club');
+    // UPSERT: la primera vez que un usuario arrastra una tab puede no tener fila todavía.
+    $stmt = $pdo->prepare(
+        'INSERT INTO view_order (user_id, view_id, position) VALUES (:user, :view_id, :position)
+         ON DUPLICATE KEY UPDATE position = VALUES(position)'
+    );
+
     $pdo->beginTransaction();
     try {
-        foreach ($ids as $i => $id) {
-            $stmt->execute(['position' => $i, 'id' => (int) $id, 'club' => Auth::clubId()]);
+        foreach ($ids as $i => $viewId) {
+            $stmt->execute(['user' => Auth::userId(), 'view_id' => $viewId, 'position' => $i]);
         }
         $pdo->commit();
     } catch (PDOException $e) {
@@ -161,7 +183,8 @@ function handleDelete(PDO $pdo): void
     if ($id <= 0) {
         respondError(400, 'Falta el id de la vista a eliminar.');
     }
-    Scope::require($pdo, 'views', $id);
+    // Borrar una vista del club se la borra a todo el club (con sus widgets, en cascada): admin.
+    requireEditarVistaId($pdo, $id);
     $stmt = $pdo->prepare('DELETE FROM views WHERE id = :id AND club_id = :club');
     $stmt->execute(['id' => $id, 'club' => Auth::clubId()]);
     echo json_encode(['ok' => true]);

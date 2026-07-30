@@ -1,6 +1,7 @@
 <?php
 
 require __DIR__ . '/../app/bootstrap_api.php';
+require __DIR__ . '/../app/ViewPermission.php';
 require __DIR__ . '/../app/ViewGenerator.php';
 
 // Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
@@ -24,8 +25,9 @@ $pdo = Database::get();
 
 // view_id viene del cliente. ViewGenerator lee la vista y sus datasets para armar el prompt de la
 // IA y después inserta widgets colgados de ella: si la vista es de otro club, todo eso pasa contra
-// datos ajenos. 404 acá, antes de instanciar el generador.
-Scope::require($pdo, 'views', $viewId);
+// datos ajenos. 404 acá, antes de instanciar el generador. Y 403 si la vista es del club y quien
+// pide no es admin: generar le llena el tablero a todos los miembros.
+requireEditarVistaId($pdo, $viewId);
 
 try {
     $generator = new ViewGenerator($pdo);

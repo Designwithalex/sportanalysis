@@ -1,6 +1,7 @@
 <?php
 
 require __DIR__ . '/../app/bootstrap_api.php';
+require __DIR__ . '/../app/ViewPermission.php';
 require __DIR__ . '/../app/WidgetSchema.php';
 require __DIR__ . '/../app/WidgetRenderer.php';
 
@@ -121,9 +122,15 @@ function handleSave(PDO $pdo): void
 
     // IDOR canónico: sin esto, un POST con el view_id de otro club insertaba un widget colgado de
     // una vista ajena. La validación va ANTES del INSERT, no en el WHERE (un INSERT no tiene WHERE).
-    Scope::require($pdo, 'views', $viewId);
+    // Suma el permiso de escritura: agregar un widget a una vista del club se lo agrega a todos.
+    requireEditarVistaId($pdo, $viewId);
     if ($widgetId > 0) {
-        Scope::require($pdo, 'widgets', $widgetId);
+        $widget = Scope::require($pdo, 'widgets', $widgetId);
+        // El widget puede colgar de una vista DISTINTA de la que vino en el POST (el UPDATE no usa
+        // view_id): la que manda para el permiso es la suya.
+        if ((int) $widget['view_id'] !== $viewId) {
+            requireEditarVistaId($pdo, (int) $widget['view_id']);
+        }
     }
 
     $datasetIds = WidgetRenderer::datasetIds($config);
@@ -178,6 +185,8 @@ function handleDuplicate(PDO $pdo): void
     // El id viene del cliente. Scope::require corta con 404 si el widget es de otro club: si no,
     // el SELECT lo leería y el INSERT clonaría un widget ajeno dentro de la vista ajena.
     $widget = Scope::require($pdo, 'widgets', $widgetId);
+    // El clon entra en la MISMA vista que el original: si esa vista es del club, solo un admin.
+    requireEditarVistaId($pdo, (int) $widget['view_id']);
 
     $posStmt = $pdo->prepare('SELECT COALESCE(MAX(position), -1) + 1 FROM widgets WHERE view_id = :view_id AND club_id = :club');
     $posStmt->execute(['view_id' => $widget['view_id'], 'club' => Auth::clubId()]);
@@ -204,7 +213,9 @@ function handleUndo(PDO $pdo): void
     $widgetId = (int) ($_POST['id'] ?? 0);
     // Dos saltos hasta la raíz (widget_versions → widgets → views): validamos el widget, y las
     // versiones se filtran por club en el propio WHERE.
-    Scope::require($pdo, 'widgets', $widgetId);
+    $widget = Scope::require($pdo, 'widgets', $widgetId);
+    // Deshacer es una escritura sobre el widget: mismo permiso que editarlo.
+    requireEditarVistaId($pdo, (int) $widget['view_id']);
 
     $versions = $pdo->prepare('SELECT id, config FROM widget_versions WHERE widget_id = :widget_id AND club_id = :club ORDER BY id DESC LIMIT 2');
     $versions->execute(['widget_id' => $widgetId, 'club' => Auth::clubId()]);
@@ -237,7 +248,11 @@ function handleReorder(PDO $pdo): void
     }
     // Aceptaba cualquier lista de ids: se podía reordenar (y por lo tanto detectar la existencia de)
     // widgets de otro club. requireAll falla en bloque si uno solo es ajeno.
-    Scope::requireAll($pdo, 'widgets', $ids);
+    $ids = Scope::requireAll($pdo, 'widgets', $ids);
+    // A diferencia del reorder de TABS (que es una preferencia por usuario en view_order),
+    // `widgets.position` es una sola columna compartida: reacomodar la grilla de una vista del
+    // club se la reacomoda a todo el club. Solo un admin.
+    requireEditarVistasDeWidgets($pdo, $ids);
 
     $stmt = $pdo->prepare('UPDATE widgets SET position = :position WHERE id = :id AND club_id = :club');
     $pdo->beginTransaction();
@@ -255,10 +270,39 @@ function handleDelete(PDO $pdo): void
         respondError(400, 'Falta id.');
     }
     // El id viene del cliente: 404 si el widget es de otro club.
-    Scope::require($pdo, 'widgets', $id);
+    $widget = Scope::require($pdo, 'widgets', $id);
+    // Borrar un widget de una vista del club se lo borra a todos los miembros.
+    requireEditarVistaId($pdo, (int) $widget['view_id']);
     $pdo->prepare('DELETE FROM widgets WHERE id = :id AND club_id = :club')
         ->execute(['id' => $id, 'club' => Auth::clubId()]);
     echo json_encode(['ok' => true]);
+}
+
+/**
+ * Permiso de escritura sobre TODAS las vistas que tocan estos widgets, en una sola query en vez de
+ * una por widget.
+ *
+ * Los ids ya vienen de Scope::requireAll(), así que la visibilidad está resuelta: acá solo falta
+ * el gate de "vista del club → solo admin". Igual el JOIN compara club_id en el ON (regla de
+ * CLAUDE.md) y el WHERE repite el club: esto decide un permiso, no vale apoyarse en el llamador.
+ *
+ * @param int[] $widgetIds
+ */
+function requireEditarVistasDeWidgets(PDO $pdo, array $widgetIds): void
+{
+    if ($widgetIds === []) {
+        return;
+    }
+    $in = implode(',', array_fill(0, count($widgetIds), '?'));
+    $stmt = $pdo->prepare(
+        "SELECT DISTINCT v.id, v.user_id FROM widgets w
+         INNER JOIN views v ON v.id = w.view_id AND v.club_id = w.club_id
+         WHERE w.id IN ($in) AND w.club_id = ?"
+    );
+    $stmt->execute([...$widgetIds, Auth::clubId()]);
+    foreach ($stmt->fetchAll() as $view) {
+        requireEditarVista($view);
+    }
 }
 
 function pruneVersions(PDO $pdo, int $widgetId, int $keep = 10): void

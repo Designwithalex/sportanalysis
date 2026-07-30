@@ -6,9 +6,29 @@ $pageTitle = 'SportAnalysis';
 
 $pdo = Database::get();
 $clubId = Auth::clubId();
+$userId = Auth::userId();
 
-$stmt = $pdo->prepare('SELECT id, nombre, tipo FROM views WHERE club_id = :club ORDER BY position, id');
-$stmt->execute(['club' => $clubId]);
+// Quién puede tocar las vistas DEL CLUB (renombrar / eliminar / regenerar con IA). Sobre sus
+// vistas privadas cualquiera puede todo. Esto es solo la UI: el servidor valida igual.
+$esAdminClub = Auth::esAdminClub();
+
+// Qué vistas se listan: las base del club (user_id NULL) más las privadas de este usuario. El
+// predicado sale de Scope para que la regla esté escrita en un solo lugar de todo el sistema.
+//
+// El ORDEN de las tabs es POR USUARIO: `view_order` guarda la preferencia de cada uno y
+// `views.position` queda como orden por defecto para quien nunca reordenó nada — de ahí el
+// COALESCE sobre un LEFT JOIN (un usuario recién llegado no tiene ninguna fila en view_order).
+// `:user_order` y `:user` son el mismo valor en dos placeholders distintos a propósito: repetir
+// un placeholder nombrado solo funciona con emulación de prepares activada, y no vale atar esta
+// query a esa configuración de PDO.
+$stmt = $pdo->prepare(
+    'SELECT v.id, v.nombre, v.tipo, v.user_id
+     FROM views v
+     LEFT JOIN view_order vo ON vo.view_id = v.id AND vo.user_id = :user_order
+     WHERE v.club_id = :club AND ' . Scope::sqlVistaVisible('v', ':user') . '
+     ORDER BY COALESCE(vo.position, v.position), v.id'
+);
+$stmt->execute(['club' => $clubId, 'user' => $userId, 'user_order' => $userId]);
 $views = $stmt->fetchAll();
 
 // Las vistas de jugador (overview) se agrupan aparte, en un desplegable, para no llenar la barra
@@ -32,10 +52,26 @@ foreach ($playerViews as $pv) {
     if ($pv['id'] == $activeViewId) { $activePlayerView = $pv; break; }
 }
 
-$activeViewName = '';
+$activeView = null;
 foreach ($views as $vv) {
-    if ($vv['id'] == $activeViewId) { $activeViewName = $vv['nombre']; break; }
+    if ($vv['id'] == $activeViewId) { $activeView = $vv; break; }
 }
+$activeViewName = $activeView['nombre'] ?? '';
+
+// Sin vista activa (club sin vistas todavía) se asume "del club": no hay nada que editar, y el
+// default seguro es el que menos permite.
+$activeViewEsDelClub = $activeView === null ? true : Scope::esVistaDelClub($activeView);
+$puedeEditarVistaActiva = $esAdminClub || !$activeViewEsDelClub;
+
+// El chip de propiedad solo aparece cuando hay algo que distinguir: si TODAS las vistas visibles
+// son del club (el caso de un club recién migrado) o todas son propias, marcarlas una por una es
+// ruido puro sobre una barra que el usuario escanea en medio de un entrenamiento.
+$hayVistasDelClub = false;
+$hayVistasPropias = false;
+foreach ($views as $vv) {
+    if (Scope::esVistaDelClub($vv)) { $hayVistasDelClub = true; } else { $hayVistasPropias = true; }
+}
+$mostrarChipDueno = $hayVistasDelClub && $hayVistasPropias;
 
 // Todos los datasets están disponibles para cualquier widget (el cruce lo decide cada widget).
 $stmt = $pdo->prepare(
@@ -99,7 +135,8 @@ require __DIR__ . '/../app/views/head.php';
         <div class="view-tabs-bar">
             <nav class="view-tabs" id="view-tabs">
                 <?php foreach ($mainViews as $v): ?>
-                    <a class="view-tab <?= $v['id'] == $activeViewId ? 'active' : '' ?>" href="?view_id=<?= $v['id'] ?>" data-view-id="<?= $v['id'] ?>" title="Arrastrá para reordenar"><?= htmlspecialchars($v['nombre']) ?></a>
+                    <?php $vEsDelClub = Scope::esVistaDelClub($v); ?>
+                    <a class="view-tab <?= $v['id'] == $activeViewId ? 'active' : '' ?>" href="?view_id=<?= $v['id'] ?>" data-view-id="<?= $v['id'] ?>" title="Arrastrá para reordenar"><?= htmlspecialchars($v['nombre']) ?><?php if ($mostrarChipDueno && $vEsDelClub): ?> <span class="tag">club</span><?php endif; ?></a>
                 <?php endforeach; ?>
             </nav>
             <?php if (!empty($playerViews)): ?>
@@ -110,7 +147,7 @@ require __DIR__ . '/../app/views/head.php';
                     </button>
                     <div class="widget-menu players-menu" id="players-menu" role="menu" hidden>
                         <?php foreach ($playerViews as $pv): ?>
-                            <a class="widget-menu-item <?= $pv['id'] == $activeViewId ? 'active' : '' ?>" role="menuitem" href="?view_id=<?= $pv['id'] ?>"><span class="wm-icon" aria-hidden="true">👤</span> <?= htmlspecialchars(str_replace('Overview — ', '', $pv['nombre'])) ?></a>
+                            <a class="widget-menu-item <?= $pv['id'] == $activeViewId ? 'active' : '' ?>" role="menuitem" href="?view_id=<?= $pv['id'] ?>"><span class="wm-icon" aria-hidden="true">👤</span> <?= htmlspecialchars(str_replace('Overview — ', '', $pv['nombre'])) ?><?php if ($mostrarChipDueno && Scope::esVistaDelClub($pv)): ?> <span class="tag">club</span><?php endif; ?></a>
                         <?php endforeach; ?>
                     </div>
                 </div>
@@ -119,14 +156,27 @@ require __DIR__ . '/../app/views/head.php';
         </div>
 
         <?php if (empty($views)): ?>
-            <div class="card">
-                <div class="card-title">Arrancá con tus vistas base</div>
-                <div class="card-sub">Dejá que la IA arme un tablero por cada tipo de dato que cargaste (partidos, entrenamientos, fuerza…) más un overview por jugador. Después las editás o creás las tuyas a mano.</div>
-                <div class="btn-row">
-                    <button class="btn" id="gen-base-btn-empty" type="button"><span class="btn-spark" aria-hidden="true">✦</span> Generar vistas base con IA</button>
-                    <button class="btn-secondary btn" id="add-view-btn-empty" type="button">+ Vista vacía</button>
+            <?php if ($esAdminClub): ?>
+                <div class="card">
+                    <div class="card-title">Arrancá con tus vistas base</div>
+                    <div class="card-sub">Dejá que la IA arme un tablero por cada tipo de dato que cargaste (partidos, entrenamientos, fuerza…) más un overview por jugador. Después las editás o creás las tuyas a mano.</div>
+                    <div class="btn-row">
+                        <button class="btn" id="gen-base-btn-empty" type="button"><span class="btn-spark" aria-hidden="true">✦</span> Generar vistas base con IA</button>
+                        <button class="btn-secondary btn" id="add-view-btn-empty" type="button">+ Vista vacía</button>
+                    </div>
                 </div>
-            </div>
+            <?php else: ?>
+                <!-- Un miembro no puede generar las vistas base del club: ofrecerle el botón sería
+                     ofrecerle un 403. Se le dice a quién pedírselas y se le deja lo que sí puede
+                     hacer solo — crear vistas propias. -->
+                <div class="card">
+                    <div class="card-title">Tu club todavía no tiene vistas base</div>
+                    <div class="card-sub">Las vistas base las genera con IA un administrador del club: un tablero por cada tipo de dato cargado (partidos, entrenamientos, fuerza…) más un overview por jugador. Pedile a un administrador de tu club que las genere. Mientras tanto podés armar vistas propias — solo las ves vos.</div>
+                    <div class="btn-row">
+                        <button class="btn" id="add-view-btn-empty" type="button">+ Vista vacía</button>
+                    </div>
+                </div>
+            <?php endif; ?>
         <?php else: ?>
             <div class="dash-toolbar">
                 <div class="tb-left">
@@ -135,15 +185,48 @@ require __DIR__ . '/../app/views/head.php';
                     <div class="tb-menu-wrap">
                         <button class="btn-secondary btn tb-more-btn" id="view-actions-btn" type="button"
                                 aria-haspopup="menu" aria-expanded="false" aria-controls="view-actions-menu" aria-label="Más acciones de la vista">⋯</button>
+                        <?php
+                        // Sobre una vista DEL CLUB, renombrar y eliminar son cosa de un admin_club.
+                        // Para el resto se deshabilitan con el motivo en el title, en vez de
+                        // desaparecer: que la acción exista y esté explicado por qué no está
+                        // disponible se lee mejor que un menú que cambia de forma según la tab.
+                        // "Generar vistas base con IA" sí se esconde: no es una acción sobre esta
+                        // vista sino una capacidad del club que un miembro nunca va a tener, y un
+                        // ítem permanentemente gris es basura visual.
+                        // Esconder NO protege: el servidor valida el permiso igual. Esto solo
+                        // evita ofrecer lo que va a terminar rechazado.
+                        $bloqueoVistaClub = $puedeEditarVistaActiva
+                            ? ''
+                            : ' disabled title="' . htmlspecialchars('Es una vista del club: solo un administrador del club puede modificarla.') . '"';
+                        ?>
                         <div class="widget-menu" id="view-actions-menu" role="menu" hidden>
-                            <button class="widget-menu-item" id="rename-view-btn" type="button" role="menuitem"><span class="wm-icon" aria-hidden="true">✎</span> Renombrar vista</button>
-                            <button class="widget-menu-item" id="gen-base-btn" type="button" role="menuitem"><span class="wm-icon" aria-hidden="true">✦</span> Generar vistas base con IA</button>
+                            <?php if (!$puedeEditarVistaActiva): ?>
+                                <!-- El title del botón deshabilitado no existe en touch (tablet al
+                                     borde de la cancha), así que el motivo va también como texto.
+                                     Reutiliza .wm-user / .wm-user-meta del menú de usuario del
+                                     appbar: mono chico, no clickeable, sin hover — exactamente lo
+                                     que hace falta acá y por lo que no puede ser .widget-menu-item. -->
+                                <div class="wm-user">
+                                    <div class="wm-user-meta">Vista del club: solo un administrador del club puede renombrarla o eliminarla.</div>
+                                </div>
+                                <div class="widget-menu-sep" role="separator"></div>
+                            <?php endif; ?>
+                            <button class="widget-menu-item" id="rename-view-btn" type="button" role="menuitem"<?= $bloqueoVistaClub ?>><span class="wm-icon" aria-hidden="true">✎</span> Renombrar vista</button>
+                            <?php if ($esAdminClub): ?>
+                                <button class="widget-menu-item" id="gen-base-btn" type="button" role="menuitem"><span class="wm-icon" aria-hidden="true">✦</span> Generar vistas base con IA</button>
+                            <?php endif; ?>
                             <div class="widget-menu-sep" role="separator"></div>
-                            <button class="widget-menu-item destructive" id="delete-view-btn" type="button" role="menuitem"><span class="wm-icon" aria-hidden="true">🗑</span> Eliminar vista</button>
+                            <button class="widget-menu-item destructive" id="delete-view-btn" type="button" role="menuitem"<?= $bloqueoVistaClub ?>><span class="wm-icon" aria-hidden="true">🗑</span> Eliminar vista</button>
                         </div>
                     </div>
                 </div>
-                <button class="btn" id="add-widget-btn" type="button"><span class="btn-spark" aria-hidden="true">✦</span> Agregar widget</button>
+                <?php if ($puedeEditarVistaActiva): ?>
+                    <!-- Agregar un widget a una vista del club es admin (api/build_widget.php y
+                         api/widgets.php validan por vista). Para un miembro, la CTA más grande de
+                         la pantalla sería un 403 asegurado: no se renderiza. Los controles de cada
+                         widget los saca js/widgets.js con el mismo criterio. -->
+                    <button class="btn" id="add-widget-btn" type="button"><span class="btn-spark" aria-hidden="true">✦</span> Agregar widget</button>
+                <?php endif; ?>
             </div>
 
             <div id="alert-box"></div>
@@ -426,6 +509,11 @@ const BASE_CLUSTERS = <?= json_encode($baseClusters, JSON_UNESCAPED_UNICODE) ?>;
 const PLAYER_COUNT = <?= $playerCount ?>;
 const OPEN_BASE_VIEWS = <?= $openBaseViews ? 'true' : 'false' ?>;
 const ACTIVE_VIEW_NAME = <?= json_encode($activeViewName, JSON_UNESCAPED_UNICODE) ?>;
+// Permisos, solo para decidir qué ofrece la UI. El servidor los vuelve a validar en cada endpoint:
+// tocar estas constantes desde la consola no habilita nada.
+const IS_CLUB_ADMIN = <?= $esAdminClub ? 'true' : 'false' ?>;          // admin_club o superadmin
+const ACTIVE_VIEW_IS_CLUB = <?= $activeViewEsDelClub ? 'true' : 'false' ?>; // vista base del club vs. privada
+const CAN_EDIT_ACTIVE_VIEW = <?= $puedeEditarVistaActiva ? 'true' : 'false' ?>; // renombrar / eliminar
 </script>
 <script src="<?= asset('../js/chart-init.js') ?>"></script>
 <script src="<?= asset('../js/widgets.js') ?>"></script>

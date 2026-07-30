@@ -156,7 +156,14 @@ function handleUpload(PDO $pdo): void
 
     // Cuántas vistas de jugador se van a perder por el CASCADE de abajo, para avisarlo en la
     // respuesta. Se cuenta ANTES del DELETE porque después ya no existen.
-    $cascadeStmt = $pdo->prepare("SELECT COUNT(*) FROM views WHERE club_id = :club AND tipo = 'player'");
+    //
+    // `user_id IS NULL` = solo las vistas del club, que son las únicas que este conteo debería
+    // mirar. Hoy da lo mismo (ninguna vista privada puede tener tipo != 'manual'), pero si algún
+    // día existiera una vista player privada, el CASCADE se la llevaría igual y este número
+    // estaría contando —y el aviso al usuario mencionando— vistas ajenas que no son suyas.
+    $cascadeStmt = $pdo->prepare(
+        "SELECT COUNT(*) FROM views WHERE club_id = :club AND tipo = 'player' AND user_id IS NULL"
+    );
     $cascadeStmt->execute(['club' => $clubId]);
     $viewsBorradas = (int) $cascadeStmt->fetchColumn();
 

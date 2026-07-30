@@ -1,6 +1,7 @@
 <?php
 
 require __DIR__ . '/../app/bootstrap_api.php';
+require __DIR__ . '/../app/ViewPermission.php';
 require __DIR__ . '/../app/WidgetSchema.php';
 require __DIR__ . '/../app/WidgetRenderer.php';
 require __DIR__ . '/../app/AnthropicClient.php';
@@ -129,11 +130,17 @@ function handleApply(PDO $pdo): void
  * widget_id llega del cliente y su config se manda al prompt de la IA. Scope::require corta con 404
  * si el widget es de otro club: es lo que impide que datos ajenos salgan hacia la API de Anthropic.
  *
+ * Acá pasan los DOS turnos (propose y apply), así que el permiso de escritura se chequea una vez
+ * en este punto y cubre el endpoint entero: modificar por IA un widget de una vista del club se lo
+ * modifica a todos los miembros, y proponer sin poder aplicar sería quemar una llamada a la IA.
+ *
  * @return array{view_id:int, type:string, config:array}
  */
 function fetchWidget(PDO $pdo, int $widgetId): array
 {
     $row = Scope::require($pdo, 'widgets', $widgetId);
+    requireEditarVistaId($pdo, (int) $row['view_id']);
+
     return ['view_id' => (int) $row['view_id'], 'type' => $row['type'], 'config' => json_decode($row['config'], true)];
 }
 

@@ -1,6 +1,7 @@
 <?php
 
 require __DIR__ . '/../app/bootstrap_api.php';
+require __DIR__ . '/../app/ViewPermission.php';
 require __DIR__ . '/../app/WidgetSchema.php';
 require __DIR__ . '/../app/WidgetRenderer.php';
 require __DIR__ . '/../app/WidgetBuilder.php';
@@ -43,7 +44,11 @@ function handlePropose(PDO $pdo): void
     }
     // view_id viene del cliente y WidgetBuilder lo usa para armar el contexto que va al prompt de
     // la IA. 404 acá, antes de construir nada, si la vista es de otro club.
-    Scope::require($pdo, 'views', $viewId);
+    //
+    // El permiso de escritura se chequea también acá, y no solo en 'apply': proponer es el primer
+    // turno del mismo flujo, y sin esto un miembro gastaría llamadas a la IA para armar un preview
+    // que después no puede confirmar nunca.
+    requireEditarVistaId($pdo, $viewId);
 
     $answers = json_decode($_POST['answers'] ?? '[]', true);
     if (!is_array($answers)) {
@@ -79,7 +84,9 @@ function handleApply(PDO $pdo): void
     }
 
     // Mismo IDOR que widgets.php POST: el view_id viaja a un INSERT, que no tiene WHERE que filtre.
-    Scope::require($pdo, 'views', $viewId);
+    // Y el mismo permiso: el widget nuevo aparece en el tablero de todo el club si la vista es del
+    // club. Se revalida acá aunque 'propose' ya lo haya hecho: son dos requests independientes.
+    requireEditarVistaId($pdo, $viewId);
 
     $datasetIds = WidgetRenderer::datasetIds($config);
     if (empty($datasetIds)) {

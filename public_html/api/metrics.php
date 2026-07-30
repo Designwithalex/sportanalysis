@@ -1,6 +1,7 @@
 <?php
 
 require __DIR__ . '/../app/bootstrap_api.php';
+require __DIR__ . '/../app/ViewPermission.php';
 
 // Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
 // Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
@@ -49,7 +50,8 @@ if ($method === 'POST') {
 
     // view_id y dataset_id vienen del cliente y viajan al INSERT de abajo (sin WHERE que los filtre):
     // sin validar, se podía crear una métrica dentro de la vista de otro club, o sobre su dataset.
-    Scope::require($pdo, 'views', $viewId);
+    // La métrica es contenido de la vista: si es del club, solo un admin la agrega.
+    requireEditarVistaId($pdo, $viewId);
     $dataset = Scope::require($pdo, 'datasets', $datasetId);
 
     $schema = json_decode($dataset['column_schema'], true);
@@ -76,7 +78,9 @@ if ($method === 'DELETE') {
         respondError(400, 'Falta id.');
     }
     // Cadena custom_metrics → views. El id llega del cliente: 404 si la métrica es de otro club.
-    Scope::require($pdo, 'custom_metrics', $id);
+    $metric = Scope::require($pdo, 'custom_metrics', $id);
+    // Borrarla se la borra a todos los widgets de la vista: si la vista es del club, solo un admin.
+    requireEditarVistaId($pdo, (int) $metric['view_id']);
     $pdo->prepare('DELETE FROM custom_metrics WHERE id = :id AND club_id = :club')
         ->execute(['id' => $id, 'club' => Auth::clubId()]);
     echo json_encode(['ok' => true]);
