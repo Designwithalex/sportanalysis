@@ -385,14 +385,26 @@ function checkedDatasetIds() {
 
 function renderDatasetCheckboxes(selectedIds) {
     const selected = new Set((selectedIds || []).map(String));
-    const catLabels = { partidos: 'Partidos', entrenamientos: 'Entrenamientos', fuerza: 'Fuerza', nutricion: 'Nutrición', otros: 'Otros' };
+    // Etiquetas del servidor (Categorias::labels()), no una copia local en el JS.
+    const catLabels = (typeof CATEGORIA_LABELS !== 'undefined' && CATEGORIA_LABELS)
+        ? CATEGORIA_LABELS
+        : {};
+
     const byCat = {};
     DATASETS.forEach(d => { (byCat[d.categoria] = byCat[d.categoria] || []).push(d); });
 
+    // Se recorre la UNIÓN de las etiquetas conocidas y las categorías que traen los datos, no
+    // solo las etiquetas. Antes esto iteraba una lista hardcodeada, y un dataset de una categoría
+    // que no estuviera en ella NO SE VEÍA en el editor: no es que saliera sin nombre, es que
+    // desaparecía. Un dato que existe siempre tiene que poder elegirse, aunque no sepamos cómo
+    // llamar a su grupo — de ahí el fallback a la clave cruda.
+    const orden = Object.keys(catLabels);
+    Object.keys(byCat).forEach(cat => { if (!orden.includes(cat)) orden.push(cat); });
+
     let html = '';
-    Object.keys(catLabels).forEach(cat => {
+    orden.forEach(cat => {
         if (!byCat[cat]) return;
-        html += `<div class="ds-group-label">${catLabels[cat]}</div>`;
+        html += `<div class="ds-group-label">${escapeHtml(catLabels[cat] || cat)}</div>`;
         byCat[cat].forEach(d => {
             const checked = selected.has(String(d.id)) ? 'checked' : '';
             html += `<label class="checkbox-item"><input type="checkbox" value="${d.id}" ${checked}> ${escapeHtml(d.nombre)}</label>`;
@@ -1139,6 +1151,24 @@ function activeViewIsClub() {
     return typeof ACTIVE_VIEW_IS_CLUB === 'undefined' ? false : ACTIVE_VIEW_IS_CLUB;
 }
 
+/**
+ * ¿Puede este usuario generar alguna vista base?
+ *
+ * NO es lo mismo que ser admin. El gate del servidor (api/base_views.php) es POR CATEGORÍA: un
+ * miembro con la habilitación de kinesiología genera la vista base de kinesiología sin ser
+ * administrador. Atar el botón a isClubAdmin() le escondía la función justo a quien la necesita,
+ * que es el caso de uso que motivó todo el sistema de habilitaciones.
+ *
+ * Los overviews por jugador sí siguen siendo admin-only: no tienen categoría, así que ninguna
+ * habilitación puede acotarlos.
+ */
+function puedeGenerarVistasBase() {
+    if (isClubAdmin()) return true;
+    return typeof CATEGORIAS_EDITABLES !== 'undefined'
+        && Array.isArray(CATEGORIAS_EDITABLES)
+        && CATEGORIAS_EDITABLES.length > 0;
+}
+
 const VIEW_PERMISSION_MSG = 'Es una vista del club: solo un administrador del club puede renombrarla o eliminarla. Sobre tus vistas propias podés hacer todo.';
 const BASE_VIEWS_PERMISSION_MSG = 'Las vistas base del club las genera un administrador. Pedile a un administrador de tu club que las genere.';
 
@@ -1572,7 +1602,7 @@ function setupBaseModal() {
         // Generar las vistas base reescribe el tablero de todo el club: solo admin_club. Los
         // disparadores (#gen-base-btn, #gen-base-btn-empty) ni se renderizan para un miembro;
         // esto cubre el ?base_views=1 pegado a mano y cualquier link viejo.
-        if (!isClubAdmin()) { showViewAlert(BASE_VIEWS_PERMISSION_MSG); return; }
+        if (!puedeGenerarVistasBase()) { showViewAlert(BASE_VIEWS_PERMISSION_MSG); return; }
         showAlert(alertBox, null);
         document.querySelector('input[name="base-mode"][value="auto"]').checked = true;
         document.getElementById('base-cluster-chips').innerHTML = BASE_CLUSTERS.length
@@ -1698,7 +1728,7 @@ function setupBaseModal() {
 
     // ?base_views=1 abre el modal directo. Para un miembro no abre nada y no dispara ningún aviso:
     // no llegó pidiendo esto, llegó por un link. La pantalla ya le explica a quién pedírselas.
-    if (typeof OPEN_BASE_VIEWS !== 'undefined' && OPEN_BASE_VIEWS && isClubAdmin()) openModal();
+    if (typeof OPEN_BASE_VIEWS !== 'undefined' && OPEN_BASE_VIEWS && puedeGenerarVistasBase()) openModal();
 }
 
 // ---------- AI patch modal ----------

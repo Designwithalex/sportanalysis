@@ -2,6 +2,7 @@
 
 require __DIR__ . '/../app/bootstrap_api.php';
 require __DIR__ . '/../app/NameMatcher.php';
+require_once __DIR__ . '/../app/CategoryPermission.php';
 
 // Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
 // Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
@@ -124,6 +125,12 @@ function handleSetPlayerColumn(PDO $pdo): void
 
     // dataset_id viene del cliente: 404 si el dataset es de otro club (antes se leía sin filtrar).
     $row = Scope::require($pdo, 'datasets', $datasetId);
+
+    // Reconciliar es ESCRITURA sobre los datos de una categoría: cambia el player_column_name del
+    // dataset y reasigna las filas. Le corresponde la misma habilitación que subir el CSV, si no
+    // el nutricionista podía re-mapear los nombres del dataset de GPS sin poder subirlo.
+    CategoryPermission::requireCategoria($row['categoria']);
+
     $columns = array_keys(json_decode($row['column_schema'], true));
     if (!in_array($columnName, $columns, true)) {
         respondError(422, 'Esa columna no existe en el dataset.');
@@ -193,6 +200,17 @@ function handleResolve(PDO $pdo): void
     // El id de la reconciliación viene del cliente (cadena name_reconciliations → datasets): 404 si
     // no es de este club, antes de que su dataset_id viaje al UPDATE de dataset_rows de abajo.
     $row = Scope::require($pdo, 'name_reconciliations', $id);
+
+    // Y la habilitación de la categoría del dataset al que pertenece: resolver o descartar una fila
+    // reescribe a qué jugador se atribuye ese dato. Se lee la categoría del dataset padre, no de la
+    // request, para que no se pueda pedir contra una categoría que sí se tiene habilitada.
+    $catStmt = $pdo->prepare('SELECT categoria FROM datasets WHERE id = :id AND club_id = :club');
+    $catStmt->execute(['id' => (int) $row['dataset_id'], 'club' => Auth::clubId()]);
+    $categoria = (string) $catStmt->fetchColumn();
+    if ($categoria === '') {
+        respondError(404, 'Dataset no encontrado.');
+    }
+    CategoryPermission::requireCategoria($categoria);
 
     if ($resolution === 'confirmed') {
         $resolvedPlayerId = (int) $row['suggested_player_id'];

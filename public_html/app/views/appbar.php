@@ -48,6 +48,13 @@ $appbarRoot = function_exists('pageRootPrefix') ? pageRootPrefix() : '../';
                     </div>
                     <div class="widget-menu-sep" role="separator"></div>
                     <a class="widget-menu-item" role="menuitem" href="<?= htmlspecialchars($appbarRoot) ?>perfil.php"><span class="wm-icon" aria-hidden="true">✎</span> Mi perfil</a>
+                    <?php /* admin.php no estaba linkeada desde ningún lado y había que escribir la
+                             URL a mano — siendo que es el único lugar donde se aprueban altas y se
+                             habilitan categorías. Una pantalla a la que no se llega no existe.
+                             Solo se muestra a quien puede entrar: para el resto devuelve 404. */ ?>
+                    <?php if (Auth::esAdminClub()): ?>
+                        <a class="widget-menu-item" role="menuitem" href="<?= htmlspecialchars($appbarRoot) ?>admin.php"><span class="wm-icon" aria-hidden="true">☑</span> Altas y permisos</a>
+                    <?php endif; ?>
                     <?php /* Cerrar sesión va por POST con token: un logout por GET lo dispara
                               cualquier <img src="/logout.php"> de un tercero. */ ?>
                     <form method="post" action="<?= htmlspecialchars($appbarRoot) ?>logout.php">

@@ -2,6 +2,8 @@
 
 require __DIR__ . '/../app/bootstrap_api.php';
 require __DIR__ . '/../app/ColumnTypeDetector.php';
+require __DIR__ . '/../app/Categorias.php';
+require __DIR__ . '/../app/CategoryPermission.php';
 
 // Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
 // Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
@@ -16,11 +18,14 @@ if (!is_array($payload)) {
     respondError(400, 'Payload inválido.');
 }
 
-$categoriasValidas = ['partidos', 'entrenamientos', 'fuerza', 'nutricion', 'otros'];
-$categoria = $payload['categoria'] ?? 'otros';
-if (!in_array($categoria, $categoriasValidas, true)) {
+// La categoría y su permiso, antes que nada: la carga a mano escribe en el mismo bucket que un
+// CSV y pide exactamente el mismo permiso. Acá una categoría ausente NO degrada a 'otros' —
+// carga_manual.php siempre manda una— y una inválida corta con 422.
+$categoria = $payload['categoria'] ?? '';
+if (!is_string($categoria) || !Categorias::esValida($categoria)) {
     respondError(422, 'Categoría inválida.');
 }
+CategoryPermission::requireCategoria($categoria);
 
 $nombre = trim($payload['nombre'] ?? '');
 if ($nombre === '') {

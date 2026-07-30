@@ -2,6 +2,9 @@
 
 require __DIR__ . '/../app/bootstrap_api.php';
 require __DIR__ . '/../app/BaseViewGenerator.php';
+// Explícito aunque BaseViewGenerator ya lo arrastre: este archivo lo usa directo en su gate de
+// abajo, y depender de un require transitivo se rompe en silencio el día que el generador cambie.
+require_once __DIR__ . '/../app/CategoryPermission.php';
 
 // Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
 // Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
@@ -9,16 +12,29 @@ requireAuth();
 
 // Las vistas base (tipo 'cluster' y 'player') son DEL CLUB: filas compartidas por todos los
 // miembros, con user_id NULL. Regenerarlas no es aditivo — BaseViewGenerator::upsertView() hace un
-// UPDATE y tres DELETE sobre widgets, view_datasets y view_filters de la vista existente. Sin este
-// gate, cualquier miembro le vaciaba el tablero a todo el club desde un botón normal de la UI.
+// UPDATE y tres DELETE sobre widgets, view_datasets y view_filters de la vista existente.
 //
-// Cubre las tres acciones, 'suggest' incluida: es el primer paso del mismo asistente y cuesta una
-// llamada a la IA que solo tiene sentido si después se puede generar.
+// EL GATE ES POR CATEGORÍA, NO GLOBAL. Antes acá había un `if (!Auth::esAdminClub()) 403` que
+// cubría las tres acciones, y eso volvía imposible el caso de uso central de las habilitaciones:
+// el kinesiólogo, que tiene la habilitación de `kinesiologia` pero es `miembro`, nunca llegaba a
+// generar SU vista base. El chequeo fino ya vive adentro de BaseViewGenerator::generateCluster(),
+// que llama a CategoryPermission::requireCategoria() de la categoría concreta antes de gastar una
+// llamada a la IA.
+//
+// 'generate_players' SÍ queda admin-only: los overviews por jugador no tienen categoría, así que
+// ninguna habilitación puede acotarlos y afectan a todo el club por igual.
 //
 // esAdminClub() y no requireNivel('admin_club'): requireNivel compara EXACTO y dejaría afuera al
 // superadmin.
-if (!Auth::esAdminClub()) {
-    respondError(403, 'Las vistas base son del club: solo un administrador puede generarlas.');
+if (($_POST['action'] ?? '') === 'generate_players' && !Auth::esAdminClub()) {
+    respondError(403, 'Los overviews por jugador son del club: solo un administrador puede generarlos.');
+}
+
+// 'suggest' no escribe nada, pero SÍ gasta una llamada a la IA. Sin este piso, un miembro sin
+// ninguna habilitación podría pedirla en loop y quemar presupuesto de API sin poder generar nada
+// después. Con al menos una categoría habilitada, el pedido tiene un destino posible.
+if (CategoryPermission::categoriasEditables() === []) {
+    respondError(403, 'No tenés ninguna categoría habilitada. Pedile a un administrador de tu club que te habilite.');
 }
 
 // Generar vistas base implica llamadas largas a la IA (~30-60s cada una) más reintentos con backoff.

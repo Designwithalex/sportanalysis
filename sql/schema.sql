@@ -2,11 +2,12 @@
 -- Correr una sola vez contra la base de Hostinger (phpMyAdmin o cliente MySQL).
 -- No se sube a public_html; es solo referencia/setup.
 --
--- Estado: MULTI-CLUB + ROLES Y VISTAS POR USUARIO (equivale a base nueva +
--- migration_2026_07_multiclub_a + _b + migration_2026_07_roles_vistas ya
--- aplicadas). Una base creada con este archivo NO necesita correr ninguna de esas
--- migraciones; sí conviene correr seed_clubs_urba.sql para poblar el dropdown de
--- registro, y promover a mano el primer superadmin:
+-- Estado: MULTI-CLUB + ROLES Y VISTAS POR USUARIO + HABILITACIONES POR ESPECIALIDAD
+-- (equivale a base nueva + migration_2026_07_multiclub_a + _b +
+-- migration_2026_07_roles_vistas + migration_2026_07_kinesiologia ya aplicadas).
+-- Una base creada con este archivo NO necesita correr ninguna de esas migraciones;
+-- sí conviene correr seed_clubs_urba.sql para poblar el dropdown de registro, y
+-- promover a mano el primer superadmin:
 --     UPDATE users SET nivel = 'superadmin' WHERE email = '...';
 -- (no hay ni debe haber un camino self-service para llegar a superadmin).
 --
@@ -15,6 +16,15 @@
 -- Eso hace estructuralmente imposible que una fila de un club cuelgue de una fila
 -- de otro club, aunque haya un bug en el PHP. Las tres excepciones están marcadas
 -- en su tabla (FKs a players con ON DELETE SET NULL: InnoDB no las admite compuestas).
+-- `view_order` y `user_categorias` no llevan club_id y no son excepciones a la
+-- regla: no son tablas de dominio sino atributos del usuario. El motivo está
+-- escrito en cada una.
+--
+-- LAS TRES COLUMNAS `categoria` (datasets, views, user_categorias) COMPARTEN EL
+-- MISMO ENUM, en el mismo orden. MariaDB no tiene tipos de dominio compartidos: la
+-- única forma de que no diverjan es tocarlas siempre juntas. Y los valores nuevos
+-- se APPENDEAN al final, nunca se reordena la lista — el ENUM se guarda como el
+-- índice del valor, así que reordenar remapea las filas existentes.
 
 SET NAMES utf8mb4;
 
@@ -105,6 +115,52 @@ CREATE TABLE verificaciones (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
+-- user_categorias — habilitaciones por especialidad: qué categorías de datos
+-- puede tocar cada usuario. Una fila por habilitación otorgada; sin fila = sin
+-- permiso (revocar es un DELETE, no hay filas de "denegado").
+--
+-- Las otorga un admin_club de su club, o el superadmin, típicamente al aprobar el
+-- alta. NADIE se auto-habilita: no debe existir endpoint donde el propio usuario
+-- inserte acá. Así, un `miembro` con la habilitación de 'kinesiologia' carga datos
+-- de kinesiología sin necesidad de ser admin.
+--
+-- `superadmin` y `admin_club` NO necesitan filas acá: pueden todo por `nivel`. El
+-- gate de la app se escribe:
+--     nivel IN ('superadmin','admin_club')  OR  EXISTS (fila en user_categorias)
+--
+-- SIN club_id, igual que view_order y por la misma razón: es un ATRIBUTO DEL
+-- USUARIO, no una tabla de dominio. Una habilitación pertenece a una persona, no a
+-- un club, y el club sale de `users.club_id` con un JOIN. Duplicarlo acá daría el
+-- costo de la denormalización sin el beneficio, porque `users` no tiene el UNIQUE
+-- (id, club_id) que haría falta como target de una FK compuesta (mismo motivo por
+-- el que `verificaciones.user_id` quedó con FK simple). Se audita en
+-- verify_isolation.sql (BLOQUE F).
+--
+-- `otorgada_por` es ON DELETE SET NULL y no CASCADE: borrar al admin que otorgó los
+-- permisos pierde el rastro de quién los dio, pero NO revoca las habilitaciones de
+-- media docena de personas. NULL también son las sembradas por migración.
+--
+-- `categoria` usa EL MISMO ENUM que datasets.categoria y views.categoria — ver la
+-- nota del encabezado antes de agregarle un valor.
+-- ---------------------------------------------------------------------------
+CREATE TABLE user_categorias (
+    user_id       INT UNSIGNED NOT NULL COMMENT 'usuario habilitado',
+    categoria     ENUM('partidos', 'entrenamientos', 'fuerza', 'nutricion', 'otros', 'kinesiologia') NOT NULL
+                  COMMENT 'categoria de datos habilitada; mismo ENUM que datasets.categoria y views.categoria',
+    otorgada_por  INT UNSIGNED NULL
+                  COMMENT 'admin_club/superadmin que la asignó. NULL = sembrada por migración, o el otorgante fue borrado',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- PK compuesta: una habilitación por (usuario, categoría). Hace el otorgar
+    -- idempotente y el revocar un DELETE exacto.
+    PRIMARY KEY (user_id, categoria),
+    CONSTRAINT fk_user_categorias_user      FOREIGN KEY (user_id)      REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_user_categorias_otorgante FOREIGN KEY (otorgada_por) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_user_categorias_categoria (categoria) COMMENT 'quiénes están habilitados en una categoría',
+    INDEX idx_user_categorias_otorgante (otorgada_por) COMMENT 'lado hijo de fk_user_categorias_otorgante'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='habilitaciones por especialidad: qué categorías de datos puede tocar cada usuario';
+
+-- ---------------------------------------------------------------------------
 -- players — plantel (Paso 1). Tabla maestra: todo dato se vincula por nombre.
 -- ---------------------------------------------------------------------------
 CREATE TABLE players (
@@ -129,7 +185,9 @@ CREATE TABLE datasets (
     id                  INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     club_id             INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
     nombre              VARCHAR(150) NOT NULL,
-    categoria           ENUM('partidos', 'entrenamientos', 'fuerza', 'nutricion', 'otros') NOT NULL DEFAULT 'otros'
+    -- Mismo ENUM que views.categoria y user_categorias.categoria. Valores nuevos
+    -- se APPENDEAN al final (ver nota del encabezado) y en las TRES columnas.
+    categoria           ENUM('partidos', 'entrenamientos', 'fuerza', 'nutricion', 'otros', 'kinesiologia') NOT NULL DEFAULT 'otros'
                         COMMENT 'bucket del Paso Datos: cada partido/sesion se sube como su propio dataset dentro de una categoria',
     original_filename   VARCHAR(255) NULL,
     column_schema       JSON NOT NULL COMMENT 'nombre de columna -> tipo detectado (numerica/texto/fecha/categorica)',
@@ -210,6 +268,19 @@ CREATE TABLE name_reconciliations (
 -- privadas. No se expresa con un CHECK para no clavar una decisión de producto;
 -- se audita en verify_isolation.sql (chequeo E04).
 --
+-- NO HAY UNIQUE (club_id, categoria) sobre las vistas cluster, y es una trampa
+-- conocida: BaseViewGenerator::upsertView() busca la vista base con
+--   WHERE tipo='cluster' AND categoria=? AND club_id=? AND user_id IS NULL LIMIT 1
+-- y lo que sale de ahí es el target de tres DELETE (widgets, view_datasets,
+-- view_filters). Con dos clusters de la misma categoría en el mismo club, el
+-- LIMIT 1 se vuelve no determinístico y regenerar puede vaciar la equivocada.
+-- Se PODRÍA cerrar con UNIQUE (club_id, tipo, categoria): en InnoDB los NULL se
+-- consideran distintos entre sí, así que no limitaría las manual/player (que tienen
+-- categoria NULL) y sí dejaría una sola cluster por categoría y club. No está puesto
+-- todavía porque agregarlo a una base con duplicados falla el ALTER, y el orden
+-- correcto es auditar primero. Ver la PARTE 5 (opcional, comentada) de
+-- migration_2026_07_kinesiologia.sql y los chequeos E05/E06 de verify_isolation.sql.
+--
 -- `fk_views_user` es ON DELETE CASCADE, NO SET NULL, y la diferencia importa:
 -- acá user_id NULL no significa "huérfana" sino "visible para todo el club", así
 -- que SET NULL convertiría las vistas privadas de una cuenta borrada en vistas
@@ -221,7 +292,8 @@ CREATE TABLE views (
     nombre        VARCHAR(150) NOT NULL,
     tipo          ENUM('manual', 'cluster', 'player') NOT NULL DEFAULT 'manual'
                   COMMENT 'manual = creada a mano; cluster = vista base de una categoria de datos; player = overview de un jugador',
-    categoria     ENUM('partidos', 'entrenamientos', 'fuerza', 'nutricion', 'otros') NULL
+    -- Mismo ENUM que datasets.categoria y user_categorias.categoria (ver encabezado).
+    categoria     ENUM('partidos', 'entrenamientos', 'fuerza', 'nutricion', 'otros', 'kinesiologia') NULL
                   COMMENT 'solo en vistas cluster: de que categoria de datasets es la vista',
     player_id     INT UNSIGNED NULL COMMENT 'solo en vistas player: jugador cuyo overview muestra la vista',
     user_id       INT UNSIGNED NULL

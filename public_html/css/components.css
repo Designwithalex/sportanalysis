@@ -2459,3 +2459,106 @@ button.view-tab-add:hover { color: var(--text); }
 /* La generación de una vista entera tarda ~60s: el skeleton .ai-thinking ocupa la grilla completa
    en vez de una sola columna de 12, que se leería como un widget roto. */
 .dash-grid > .ai-thinking { grid-column: 1 / -1; }
+
+/* ============================================================
+   Permisos por categoría — habilitaciones por especialidad.
+
+   Todo lo de acá es aditivo sobre componentes que ya existían (.category-chip, .field-hint,
+   .page-header). No se redefine ninguna regla previa: lo único que cambia de comportamiento es el
+   chip cuando lleva .is-locked, que antes no existía.
+   ============================================================ */
+
+/* Texto solo para lectores de pantalla.
+   Hace falta porque el motivo de un chip bloqueado no puede ir solo en `title`: sobre un
+   <input disabled> el title no se anuncia, y en touch no hay hover que lo dispare. El patrón es
+   el clásico de 1px + clip-path (no `display:none`, que lo saca del árbol de accesibilidad, ni
+   `text-indent:-9999px`, que rompe en RTL). */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Chip de categoría sin habilitación.
+   Borde punteado + candado + gris: se lee como "existe pero no es para vos" sin necesitar el
+   texto. El punteado es el diferenciador que no depende del color (daltonismo, pantalla al sol
+   en el borde de la cancha). --text-faint es el escalón AA de la rampa; no bajar de ahí.
+   `cursor: not-allowed` y no `pointer`: el <label> sigue siendo clickeable aunque su input esté
+   deshabilitado, y sin esto parece un control que dejó de responder. */
+.category-chip.is-locked span {
+    color: var(--text-faint);
+    border-style: dashed;
+    background: transparent;
+    cursor: not-allowed;
+}
+/* RESET OBLIGATORIO para cualquier <span> anidado dentro de un chip.
+
+   `.category-chip span` (la regla original, más arriba) es un selector de DESCENDIENTE, no de
+   hijo directo: le pega a CUALQUIER span de adentro del chip, no solo al que hace de píldora. Sin
+   este reset, el candado se dibuja como una segunda píldora completa —medido: 48px de ancho, con
+   su propio borde y su propio radio— y el texto para lector de pantalla ocupa 33px en vez de 1,
+   empujando la etiqueta. Se ve como un espacio muerto enorme entre el nombre y el candado.
+
+   La especificidad es la que resuelve: (0,2,0) —dos clases— le gana a (0,1,1) —una clase y un
+   elemento—. Por eso alcanza con anteponer .category-chip y no hace falta tocar la regla original
+   ni recurrir a !important. */
+.category-chip .chip-lock,
+.category-chip .sr-only {
+    display: inline;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: inherit;
+    font-weight: inherit;
+    line-height: inherit;
+    cursor: inherit;
+    /* `min-height: 0` no es defensivo de más: la regla de `pointer: coarse` de más abajo también
+       es descendiente, así que sin esto el candado y el texto oculto se convierten en items flex
+       de 44px de alto y estiran la píldora a 61px. Medido. */
+    min-height: 0;
+}
+.category-chip .chip-lock {
+    font-size: 10.5px;
+    margin-left: 4px;
+    /* El emoji candado trae su propio color del font de emoji; se le baja el peso visual para que
+       no compita con la etiqueta, que es lo que hay que leer primero. */
+    opacity: 0.7;
+}
+/* El .sr-only de adentro del chip vuelve a ser 1×1 y absoluto: el reset de arriba lo dejó inline
+   y hay que reponerle lo suyo (mismo bloque que .sr-only, con la especificidad que gana acá). */
+.category-chip .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+/* El uploader y el editor de habilitaciones comparten .category-picker, y en los dos el chip es
+   el control principal de la pantalla. En touch tiene que llegar al mínimo de 44px.
+   inline-flex y no solo min-height: con inline-block, min-height agranda la caja pero deja el
+   texto arriba de todo en vez de centrarlo. */
+@media (pointer: coarse) {
+    .category-chip span {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+    }
+    /* El reset de arriba dejó a los anidados en `display: inline`; el flex del padre no los toca. */
+}
+
+/* La segunda sección de admin.php es destino de un ancla (#miembros) y de los redirect PRG que
+   guardan habilitaciones: sin este margen, el navegador deja el título pegado al borde superior
+   y no se ve de qué sección es la fila que quedó arriba de todo. */
+#miembros {
+    scroll-margin-top: var(--space-5);
+}

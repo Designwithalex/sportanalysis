@@ -1,5 +1,8 @@
 <?php
 require __DIR__ . '/../app/bootstrap_page.php';
+require_once __DIR__ . '/../app/Categorias.php';
+require_once __DIR__ . '/../app/CategoryPermission.php';
+require_once __DIR__ . '/../app/ViewPermission.php';
 requireAuth();
 
 $pageTitle = 'SportAnalysis';
@@ -12,6 +15,13 @@ $userId = Auth::userId();
 // vistas privadas cualquiera puede todo. Esto es solo la UI: el servidor valida igual.
 $esAdminClub = Auth::esAdminClub();
 
+// Generar vistas base NO es admin-only: api/base_views.php gatea POR CATEGORÍA, así que un miembro
+// con la habilitación de kinesiología genera la suya sin ser administrador. Atar el botón a
+// $esAdminClub le escondía la función justo a quien la necesita — el caso de uso que motivó todo
+// el sistema de habilitaciones. (Los overviews por jugador sí siguen siendo admin-only: no tienen
+// categoría y ninguna habilitación puede acotarlos.)
+$puedeGenerarBase = $esAdminClub || CategoryPermission::categoriasEditables() !== [];
+
 // Qué vistas se listan: las base del club (user_id NULL) más las privadas de este usuario. El
 // predicado sale de Scope para que la regla esté escrita en un solo lugar de todo el sistema.
 //
@@ -21,8 +31,13 @@ $esAdminClub = Auth::esAdminClub();
 // `:user_order` y `:user` son el mismo valor en dos placeholders distintos a propósito: repetir
 // un placeholder nombrado solo funciona con emulación de prepares activada, y no vale atar esta
 // query a esa configuración de PDO.
+//
+// `v.categoria` viaja en el SELECT aunque las tabs no la muestren: es lo que puedeEditarVista()
+// necesita para resolver el permiso de una vista base de categoría (el kinesiólogo edita la vista
+// de kinesiología). Sin ella, esa función cae a vistaCompleta() y paga un SELECT extra por cada
+// vista que quiera evaluar — una consulta por tab para un dato que esta query ya tiene a mano.
 $stmt = $pdo->prepare(
-    'SELECT v.id, v.nombre, v.tipo, v.user_id
+    'SELECT v.id, v.nombre, v.tipo, v.user_id, v.categoria
      FROM views v
      LEFT JOIN view_order vo ON vo.view_id = v.id AND vo.user_id = :user_order
      WHERE v.club_id = :club AND ' . Scope::sqlVistaVisible('v', ':user') . '
@@ -72,7 +87,14 @@ $activeViewName = $activeView['nombre'] ?? '';
 // Sin vista activa (club sin vistas todavía) se asume "del club": no hay nada que editar, y el
 // default seguro es el que menos permite.
 $activeViewEsDelClub = $activeView === null ? true : Scope::esVistaDelClub($activeView);
-$puedeEditarVistaActiva = $esAdminClub || !$activeViewEsDelClub;
+
+// La regla la decide ViewPermission, no esta pantalla. Escrita a mano acá era
+// `$esAdminClub || !$activeViewEsDelClub`, que desde el eje de categorías quedó CORTA: le negaba
+// al kinesiólogo la vista base de kinesiología, que el servidor sí le deja editar
+// (api/widgets.php → requireEditarVista). El resultado no era un permiso de más sino una pantalla
+// que esconde botones que funcionan — el peor de los dos errores, porque no da ningún síntoma.
+// La fila ya trae tipo y categoria, así que no relee nada.
+$puedeEditarVistaActiva = $activeView !== null && puedeEditarVista($activeView);
 
 // Todos los datasets están disponibles para cualquier widget (el cruce lo decide cada widget).
 $stmt = $pdo->prepare(
@@ -88,16 +110,18 @@ unset($d);
 $hasData = !empty($datasets);
 
 // Clusters (categorías) que tienen datos: alimentan el modal de "vistas base".
-$catLabels = [
-    'partidos' => 'Partidos', 'entrenamientos' => 'Entrenamientos',
-    'fuerza' => 'Fuerza', 'nutricion' => 'Nutrición', 'otros' => 'Otros datos',
-];
+//
+// Se recorre Categorias::conVistaBase() y NO el catálogo entero. La lista escrita a mano que había
+// acá incluía `entrenamientos` y `otros`, que no tienen vista base: el modal ofrecía un chip por
+// cada una y BaseViewGenerator::cluster() las rechaza con "no tiene vista base del club". O sea,
+// una opción visible cuyo único destino posible era un error. El orden de presentación y las
+// etiquetas también salen de ahí, así que agregar una categoría no vuelve a requerir tocar esto.
 $clusterCounts = [];
 foreach ($datasets as $d) {
     $clusterCounts[$d['categoria']] = ($clusterCounts[$d['categoria']] ?? 0) + 1;
 }
 $baseClusters = [];
-foreach ($catLabels as $k => $lbl) {
+foreach (Categorias::conVistaBase() as $k => $lbl) {
     if (!empty($clusterCounts[$k])) {
         $baseClusters[] = ['categoria' => $k, 'label' => $lbl, 'count' => $clusterCounts[$k]];
     }
@@ -210,7 +234,7 @@ require __DIR__ . '/../app/views/head.php';
                     <?= viewOverflowHtml('club') ?>
                     <?= viewPlayersHtml($clubPlayerViews, $activeViewId, 'club') ?>
                     <?php if (empty($clubTabs) && empty($clubPlayerViews)): ?>
-                        <?php if ($esAdminClub): ?>
+                        <?php if ($puedeGenerarBase): ?>
                             <button class="view-tab vrail-cta" id="gen-base-btn-row" type="button"><span aria-hidden="true">✦</span> Generar vistas base</button>
                         <?php else: ?>
                             <!-- Un miembro no puede generar las vistas base: se le dice el estado,
@@ -233,7 +257,7 @@ require __DIR__ . '/../app/views/head.php';
         <?php endif; ?>
 
         <?php if (empty($views)): ?>
-            <?php if ($esAdminClub): ?>
+            <?php if ($puedeGenerarBase): ?>
                 <div class="card">
                     <div class="card-title">Arrancá con tus vistas base</div>
                     <div class="card-sub">Dejá que la IA arme un tablero por cada tipo de dato que cargaste (partidos, entrenamientos, fuerza…) más un overview por jugador. Después las editás o creás las tuyas a mano.</div>
@@ -272,9 +296,20 @@ require __DIR__ . '/../app/views/head.php';
                         // ítem permanentemente gris es basura visual.
                         // Esconder NO protege: el servidor valida el permiso igual. Esto solo
                         // evita ofrecer lo que va a terminar rechazado.
+                        //
+                        // El motivo cambia según QUÉ le falta, porque la acción que tiene que
+                        // tomar es distinta: una habilitación de categoría se la da un admin de su
+                        // club en un click; que lo asciendan a administrador, no. Son los mismos
+                        // dos mensajes que devuelve requireEditarVista(), a propósito: leer una
+                        // cosa en la pantalla y otra en el error sería peor que no explicar nada.
+                        $catVistaActiva = (string) ($activeView['categoria'] ?? '');
+                        $motivoBloqueo = ($activeView !== null && ($activeView['tipo'] ?? '') === 'cluster' && $catVistaActiva !== '')
+                            ? 'Es la vista base de ' . Categorias::label($catVistaActiva)
+                                . ': para modificarla necesitás esa categoría habilitada, o ser administrador del club.'
+                            : 'Es una vista del club: solo un administrador del club puede modificarla.';
                         $bloqueoVistaClub = $puedeEditarVistaActiva
                             ? ''
-                            : ' disabled title="' . htmlspecialchars('Es una vista del club: solo un administrador del club puede modificarla.') . '"';
+                            : ' disabled title="' . htmlspecialchars($motivoBloqueo, ENT_QUOTES) . '"';
                         ?>
                         <div class="widget-menu" id="view-actions-menu" role="menu" hidden>
                             <?php if (!$puedeEditarVistaActiva): ?>
@@ -284,12 +319,12 @@ require __DIR__ . '/../app/views/head.php';
                                      appbar: mono chico, no clickeable, sin hover — exactamente lo
                                      que hace falta acá y por lo que no puede ser .widget-menu-item. -->
                                 <div class="wm-user">
-                                    <div class="wm-user-meta">Vista del club: solo un administrador del club puede renombrarla o eliminarla.</div>
+                                    <div class="wm-user-meta"><?= htmlspecialchars($motivoBloqueo) ?></div>
                                 </div>
                                 <div class="widget-menu-sep" role="separator"></div>
                             <?php endif; ?>
                             <button class="widget-menu-item" id="rename-view-btn" type="button" role="menuitem"<?= $bloqueoVistaClub ?>><span class="wm-icon" aria-hidden="true">✎</span> Renombrar vista</button>
-                            <?php if ($esAdminClub): ?>
+                            <?php if ($puedeGenerarBase): ?>
                                 <button class="widget-menu-item" id="gen-base-btn" type="button" role="menuitem"><span class="wm-icon" aria-hidden="true">✦</span> Generar vistas base con IA</button>
                             <?php endif; ?>
                             <div class="widget-menu-sep" role="separator"></div>
@@ -613,11 +648,20 @@ const BASE_CLUSTERS = <?= json_encode($baseClusters, JSON_UNESCAPED_UNICODE) ?>;
 const PLAYER_COUNT = <?= $playerCount ?>;
 const OPEN_BASE_VIEWS = <?= $openBaseViews ? 'true' : 'false' ?>;
 const ACTIVE_VIEW_NAME = <?= json_encode($activeViewName, JSON_UNESCAPED_UNICODE) ?>;
+// Etiquetas de categoría desde el servidor, NO hardcodeadas en el JS. widgets.js tenía su propia
+// copia y agrupaba con Object.keys() sobre ella: una categoría que faltara en esa lista no salía
+// sin etiqueta, directamente NO SE VEÍA en el editor de widgets. Con kinesiología eso significaba
+// que el kinesiólogo no encontraba sus propios datasets.
+const CATEGORIA_LABELS = <?= json_encode(Categorias::labels(), JSON_UNESCAPED_UNICODE) ?>;
 // Permisos, solo para decidir qué ofrece la UI. El servidor los vuelve a validar en cada endpoint:
 // tocar estas constantes desde la consola no habilita nada.
 const IS_CLUB_ADMIN = <?= $esAdminClub ? 'true' : 'false' ?>;          // admin_club o superadmin
 const ACTIVE_VIEW_IS_CLUB = <?= $activeViewEsDelClub ? 'true' : 'false' ?>; // vista base del club vs. privada
 const CAN_EDIT_ACTIVE_VIEW = <?= $puedeEditarVistaActiva ? 'true' : 'false' ?>; // renombrar / eliminar
+// Categorías que este usuario puede escribir. Decide si se le ofrece "Generar vistas base": el
+// gate del servidor (api/base_views.php) es por categoría, no por nivel, así que mostrar el botón
+// solo a los admin le escondía la función al kinesiólogo que sí puede usarla.
+const CATEGORIAS_EDITABLES = <?= json_encode(CategoryPermission::categoriasEditables(), JSON_UNESCAPED_UNICODE) ?>;
 </script>
 <script src="<?= asset('../js/chart-init.js') ?>"></script>
 <script src="<?= asset('../js/widgets.js') ?>"></script>

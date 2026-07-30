@@ -5,12 +5,14 @@ require_once __DIR__ . '/WidgetSchema.php';
 require_once __DIR__ . '/WidgetRenderer.php';
 require_once __DIR__ . '/Database.php';
 require_once __DIR__ . '/Auth.php';
+require_once __DIR__ . '/Categorias.php';
+require_once __DIR__ . '/CategoryPermission.php';
 
 /**
  * Genera "vistas base" sugeridas por IA a partir de los datos ya cargados, sin que el PF tenga que
  * armar cada widget a mano. Dos ejes:
  *
- *   - Por CLUSTER de datos (categoría de datasets: partidos / entrenamientos / fuerza / nutrición):
+ *   - Por CLUSTER de datos (las categorías que Categorias::conVistaBase() marca):
  *     un tablero de 4-8 widgets que cruza TODOS los datasets de esa categoría (varios partidos ⇒
  *     info agregada a través de los partidos vía dataset_ids + la columna sintética __dataset).
  *
@@ -29,20 +31,27 @@ require_once __DIR__ . '/Auth.php';
  * explícito (el `DEFAULT 1` del esquema no protege, oculta).
  *
  * VISTAS BASE = VISTAS DEL CLUB (`views.user_id IS NULL`). Nacen y se buscan siempre con user_id
- * NULL: las ven todos los miembros y solo un admin_club las puede generar (el gate está en
- * api/base_views.php, que es el único caller). Los SELECT de upsertView() repiten `user_id IS NULL`
- * por la misma razón que repiten club_id: son el target de tres DELETE.
+ * NULL: las ven todos los miembros. Los SELECT de upsertView() repiten `user_id IS NULL` por la
+ * misma razón que repiten club_id: son el target de tres DELETE.
+ *
+ * QUIÉN PUEDE GENERARLAS. Un admin_club, o quien tenga habilitada la categoría de esa vista
+ * (CategoryPermission) — generar la vista base de kinesiología es una escritura sobre los datos de
+ * kinesiología, y es el mismo permiso que subir su CSV. El gate está en generateCluster(), no solo
+ * en el endpoint: regenerar es destructivo (un UPDATE y tres DELETE sobre una fila compartida por
+ * todo el club) y no puede depender de que ningún caller futuro se acuerde de chequear.
+ *
+ * El overview por jugador (`tipo='player'`) queda en admin_club: cruza TODAS las categorías a la
+ * vez, así que no hay una sola habilitación que alcance para autorizarlo. Ese gate sigue siendo el
+ * del endpoint (api/base_views.php).
+ *
+ * QUÉ CATEGORÍAS TIENEN VISTA BASE: las que Categorias::tieneVistaBase() marca (fuerza, partidos,
+ * kinesiología, nutrición). `otros` no —es el bolsón de lo que no encaja, y un tablero
+ * autogenerado sobre datasets que no comparten ni columnas ni sentido no dice nada— y
+ * `entrenamientos` tampoco por ahora. Las dos siguen siendo categorías válidas para subir datos y
+ * para armar vistas a mano.
  */
 class BaseViewGenerator
 {
-    private const CATEGORIA_LABELS = [
-        'partidos' => 'Partidos',
-        'entrenamientos' => 'Entrenamientos',
-        'fuerza' => 'Fuerza',
-        'nutricion' => 'Nutrición',
-        'otros' => 'Otros datos',
-    ];
-
     private PDO $pdo;
 
     public function __construct(PDO $pdo)
@@ -60,7 +69,14 @@ class BaseViewGenerator
         return $clubId;
     }
 
-    /** @return array<string,string> categoria => label, solo las categorías que tienen datasets. */
+    /**
+     * Categorías CON VISTA BASE que además tienen al menos un dataset cargado.
+     *
+     * Las dos condiciones: `Categorias::conVistaBase()` y no `labels()`, porque una categoría sin
+     * vista base no se ofrece en el asistente aunque tenga datasets.
+     *
+     * @return array<string,string> categoria => label, en orden de presentación.
+     */
     public function nonEmptyClusters(): array
     {
         // query() no admite parámetros: prepare() para poder acotar por club.
@@ -71,7 +87,7 @@ class BaseViewGenerator
         $counts = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
 
         $out = [];
-        foreach (self::CATEGORIA_LABELS as $key => $label) {
+        foreach (Categorias::conVistaBase() as $key => $label) {
             if ((int) ($counts[$key] ?? 0) > 0) {
                 $out[$key] = $label;
             }
@@ -134,15 +150,27 @@ PROMPT;
      */
     public function generateCluster(string $categoria, string $intent = ''): array
     {
-        if (!isset(self::CATEGORIA_LABELS[$categoria])) {
+        if (!Categorias::esValida($categoria)) {
             throw new RuntimeException("Categoría desconocida: $categoria");
         }
-        $datasets = $this->fetchDatasets("categoria = ?", [$categoria]);
-        if (empty($datasets)) {
-            throw new RuntimeException('No hay datasets en la categoría ' . self::CATEGORIA_LABELS[$categoria] . '.');
+        if (!Categorias::tieneVistaBase($categoria)) {
+            throw new RuntimeException(
+                Categorias::label($categoria) . ' no tiene vista base del club. '
+                . 'Armá una vista a mano si querés analizar estos datos.'
+            );
         }
 
-        $label = self::CATEGORIA_LABELS[$categoria];
+        // Generar la vista base de X es una escritura sobre los datos de X: mismo permiso que
+        // subir su CSV. Corta con 403 (Response.php ya está cargado: el único caller es un
+        // endpoint JSON). Va ANTES de la llamada a la IA, que cuesta plata y ~60s.
+        CategoryPermission::requireCategoria($categoria);
+
+        $datasets = $this->fetchDatasets("categoria = ?", [$categoria]);
+        if (empty($datasets)) {
+            throw new RuntimeException('No hay datasets en la categoría ' . Categorias::label($categoria) . '.');
+        }
+
+        $label = Categorias::label($categoria);
         $system = $this->clusterSystemPrompt($label);
         $user = $this->clusterUserPrompt($label, $datasets, $intent);
 
@@ -563,7 +591,12 @@ PROMPT;
             . "REGLAS DE ESTE OVERVIEW:\n"
             . "- Mostrá la evolución del jugador sesión a sesión / partido a partido: usá \"__dataset\" (el partido/sesión) como eje temporal (x_column) o categoría.\n"
             . "- Cada widget solo puede usar columnas que existan en TODOS sus dataset_ids. En la práctica, agrupá en cada widget los datasets que comparten columnas (normalmente los de una misma categoría: todos los partidos juntos, todas las sesiones de fuerza juntas, etc.). NO mezcles categorías distintas en un mismo widget.\n"
-            . "- Cubrí varias facetas del jugador con las categorías disponibles (carga de partidos, entrenamientos, fuerza, nutrición), un par de widgets por faceta.\n\n"
+            // La lista de categorías sale de Categorias, no escrita a mano: era la séptima copia
+            // del catálogo y la más difícil de detectar cuando se desactualiza — no rompe nada,
+            // solo hace que la IA nunca proponga widgets de la categoría que falta.
+            . "- Cubrí varias facetas del jugador con las categorías disponibles ("
+            . implode(', ', array_map('mb_strtolower', Categorias::labels()))
+            . "), un par de widgets por faceta.\n\n"
             . $this->commonWidgetRules();
     }
 

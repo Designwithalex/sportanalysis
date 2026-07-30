@@ -17,12 +17,15 @@
 --     migration_2026_07_multiclub_b.sql): ahí sí hace falta mirarlos.
 --   - El BLOQUE E entero es [SIN FK]: cubre `users`, `views.user_id`, `view_order`
 --     y `verificaciones`, donde las FKs son simples a propósito.
+--   - El BLOQUE F cubre `user_categorias` (habilitaciones por especialidad), que
+--     tampoco lleva club_id y por lo tanto tampoco tiene FKs compuestas.
 --
 -- Requiere que la columna club_id exista, o sea: PARTE A ya corrida.
--- El BLOQUE E requiere además migration_2026_07_roles_vistas.sql. Por eso va como
--- statement SEPARADO (igual que el D): si esa migración todavía no se aplicó, el E
--- falla con "Unknown column 'views.user_id'" / "Table 'view_order' doesn't exist"
--- pero los BLOQUES 1-3 y el D ya corrieron y se leen igual.
+-- El BLOQUE E requiere además migration_2026_07_roles_vistas.sql, y el BLOQUE F
+-- requiere migration_2026_07_kinesiologia.sql. Por eso cada uno va como statement
+-- SEPARADO (igual que el D): si esa migración todavía no se aplicó, el bloque falla
+-- con "Unknown column 'views.user_id'" / "Table 'user_categorias' doesn't exist"
+-- pero los bloques anteriores ya corrieron y se leen igual.
 -- MariaDB 11.8 — sin funciones de ventana, sólo COUNT + JOIN.
 -- =============================================================================
 
@@ -171,13 +174,86 @@ SELECT 'E04  views cluster/player con user_id NOT NULL', COUNT(*)
     WHERE tipo IN ('cluster', 'player') AND user_id IS NOT NULL
 UNION ALL
 -- No hay UNIQUE (club_id, categoria) sobre las vistas cluster y el upsert de
--- BaseViewGenerator resuelve con LIMIT 1: si alguna vez se duplicaron, el
--- generador siempre pisa la misma y las otras quedan zombis. Cuenta las SOBRANTES.
+-- BaseViewGenerator resuelve con
+--     WHERE tipo='cluster' AND categoria=? AND club_id=? AND user_id IS NULL LIMIT 1
+-- que es el target de tres DELETE (widgets, view_datasets, view_filters). Si alguna
+-- vez se duplicaron, el LIMIT 1 se vuelve no determinístico: regenerar las vistas
+-- base puede vaciar la equivocada. Cuenta las SOBRANTES de cada grupo.
+--
+-- El WHERE replica el del generador: sólo las vistas BASE (user_id NULL) compiten
+-- entre sí, y `categoria IS NOT NULL` porque una cluster sin categoría no la
+-- encuentra ese SELECT — ese caso es el E06, no un duplicado.
 SELECT 'E05  vistas cluster duplicadas por (club, categoria)', COALESCE(SUM(sobrantes), 0)
     FROM (
         SELECT COUNT(*) - 1 AS sobrantes
         FROM views
-        WHERE tipo = 'cluster'
+        WHERE tipo = 'cluster' AND categoria IS NOT NULL AND user_id IS NULL
         GROUP BY club_id, categoria
         HAVING COUNT(*) > 1
-    ) dup;
+    ) dup
+UNION ALL
+-- Una vista cluster sin categoría es inalcanzable para el upsert de
+-- BaseViewGenerator (busca por `categoria = ?`, que nunca matchea NULL): queda como
+-- tab zombi que ninguna regeneración actualiza ni reemplaza.
+SELECT 'E06  vistas cluster con categoria NULL', COUNT(*)
+    FROM views
+    WHERE tipo = 'cluster' AND categoria IS NULL;
+
+
+-- ---------------------------------------------------------------------------
+-- BLOQUE 6 / F (aparte) — Habilitaciones por especialidad (`user_categorias`).
+--
+-- Requiere migration_2026_07_kinesiologia.sql corrida. Statement separado por lo
+-- mismo que el E: si la tabla no existe todavía, los bloques anteriores ya se
+-- leyeron igual.
+--
+-- `user_categorias` NO lleva club_id, por decisión documentada en la PARTE 2 de esa
+-- migración: es un atributo del usuario (como `view_order`), no una tabla de
+-- dominio, y `users` no tiene el UNIQUE (id, club_id) que haría falta para colgarle
+-- una FK compuesta. El club de una habilitación se deriva SIEMPRE de
+-- `users.club_id`. Estos chequeos son la contrapartida de esa decisión.
+--
+-- F03 excluye a los `superadmin` a propósito, por el mismo motivo por el que el
+-- BLOQUE E no chequea `verificaciones.revisada_por`: un superadmin opera sobre
+-- cualquier club, así que ahí un club distinto es LEGÍTIMO. Un `admin_club`
+-- otorgando fuera de su club, en cambio, es una fuga.
+-- ---------------------------------------------------------------------------
+
+SELECT 'F01  user_categorias -> users inexistente (user_id)' AS chequeo, COUNT(*) AS filas_malas
+    FROM user_categorias uc
+    LEFT JOIN users u ON u.id = uc.user_id
+    WHERE u.id IS NULL
+UNION ALL
+-- La FK CASCADE ya lo impide; se chequea igual, como alarma de que alguien la
+-- soltó "para destrabar" algo (mismo criterio que los BLOQUES B y C).
+SELECT 'F02  user_categorias -> otorgante inexistente', COUNT(*)
+    FROM user_categorias uc
+    LEFT JOIN users o ON o.id = uc.otorgada_por
+    WHERE uc.otorgada_por IS NOT NULL AND o.id IS NULL
+UNION ALL
+SELECT 'F03  otorgante de otro club, y no es superadmin  [SIN FK]', COUNT(*)
+    FROM user_categorias uc
+    JOIN users u ON u.id = uc.user_id
+    JOIN users o ON o.id = uc.otorgada_por
+    WHERE o.club_id <> u.club_id
+      AND o.nivel <> 'superadmin'
+UNION ALL
+-- Nadie se auto-habilita: las habilitaciones las otorga otra persona (un admin_club
+-- de su club, o el superadmin). Una fila donde el otorgante es el propio
+-- beneficiario significa que existe (o existió) un camino self-service, que es
+-- exactamente lo que no debe haber.
+-- Se excluye al `superadmin`: que se otorgue a sí mismo es legítimo (puede todo
+-- igual, y es quien hace el bootstrap). Las sembradas por esta migración tienen
+-- otorgada_por NULL y tampoco cuentan acá.
+SELECT 'F04  habilitaciones auto-otorgadas (otorgada_por = user_id)', COUNT(*)
+    FROM user_categorias uc
+    JOIN users u ON u.id = uc.user_id
+    WHERE uc.otorgada_por = uc.user_id
+      AND u.nivel <> 'superadmin'
+UNION ALL
+-- Otorgante que no tiene nivel para otorgar. No es un cruce de clubes pero es el
+-- mismo agujero: alguien escribió en esta tabla sin pasar por el gate.
+SELECT 'F05  otorgante sin nivel admin_club/superadmin', COUNT(*)
+    FROM user_categorias uc
+    JOIN users o ON o.id = uc.otorgada_por
+    WHERE o.nivel NOT IN ('admin_club', 'superadmin');

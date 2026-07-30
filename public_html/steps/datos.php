@@ -1,5 +1,7 @@
 <?php
 require __DIR__ . '/../app/bootstrap_page.php';
+require_once __DIR__ . '/../app/Categorias.php';
+require_once __DIR__ . '/../app/CategoryPermission.php';
 requireAuth();
 
 $pageTitle = 'Datos — SportAnalysis';
@@ -22,17 +24,36 @@ $stmt = $pdo->prepare(
 $stmt->execute(['club' => Auth::clubId()]);
 $datasets = $stmt->fetchAll();
 
-$categorias = [
-    'partidos' => 'Partidos',
-    'entrenamientos' => 'Entrenamientos',
-    'fuerza' => 'Fuerza',
-    'nutricion' => 'Nutrición',
-    'otros' => 'Otros datos',
-];
+// Catálogo completo, del único lugar donde vive. Se muestran TODAS las categorías, también las
+// que este usuario no puede escribir: si las de otro rubro desaparecieran, el kinesiólogo no
+// entendería por qué "Fuerza" no existe para él y pensaría que la app está rota o incompleta.
+$categorias = Categorias::labels();
+
+/**
+ * Categorías que esta sesión puede ESCRIBIR. Lista vacía = usuario de solo lectura.
+ *
+ * Esto no protege nada: api/datasets.php y api/manual_dataset.php validan igual con
+ * CategoryPermission::requireCategoria(). Sirve para no ofrecer botones que van a terminar en un
+ * 403 después de que el usuario eligió un archivo y esperó la subida.
+ *
+ * @var array<string,int> $editables Set para chequear con isset().
+ */
+$editablesLista = CategoryPermission::categoriasEditables();
+$editables      = array_flip($editablesLista);
+$puedeCargar    = $editablesLista !== [];
+// Categoría preseleccionada del uploader: la primera que el usuario PUEDA escribir. Dejar
+// 'partidos' fijo haría que el kinesiólogo abra la pantalla con un chip elegido que no puede usar.
+$catPorDefecto  = $editablesLista[0] ?? null;
+// Las bloqueadas, para el renglón que explica el estado sin depender de un title (que en la
+// tablet del borde de la cancha no existe).
+$bloqueadas = array_values(array_diff(array_keys($categorias), $editablesLista));
 
 $byCategoria = array_fill_keys(array_keys($categorias), []);
 foreach ($datasets as $d) {
-    $byCategoria[$d['categoria']][] = $d;
+    // Una fila con una categoría fuera del catálogo (dato viejo, ENUM tocado a mano) no se pierde
+    // en silencio: cae en el bolsón en vez de crear una clave suelta que ningún foreach recorre.
+    $key = isset($byCategoria[$d['categoria']]) ? $d['categoria'] : Categorias::DEFAULT;
+    $byCategoria[$key][] = $d;
 }
 
 require __DIR__ . '/../app/views/head.php';
@@ -52,6 +73,22 @@ require __DIR__ . '/../app/views/appbar.php';
          steps/analysis.php (estado vacío + menú ⋯). El parámetro analysis.php?base_views=1 sigue
          abriendo ese modal directo, por si quedó algún link viejo dando vueltas. -->
 
+    <?php if (!$puedeCargar): ?>
+        <?php /* Sin ninguna categoría habilitada no se dibuja el uploader. Un formulario completo
+                 que responde 403 recién después de elegir el archivo y esperar la subida no es
+                 "seguro por el servidor": es una pantalla que le miente al usuario. Se le dice qué
+                 puede hacer (todo lo de leer) y a quién pedirle lo que le falta. */ ?>
+        <div class="card">
+            <div class="card-title">Podés ver los datos, todavía no cargarlos</div>
+            <div class="card-sub">
+                Ves todos los datasets de tu club y todos los análisis, pero no tenés ninguna categoría
+                habilitada para subir o editar datos. Las habilitaciones las da un administrador de tu
+                club desde su panel de solicitudes: pedile la de tu especialidad (por ejemplo
+                <?= htmlspecialchars(Categorias::label('kinesiologia')) ?>) y este formulario aparece solo.
+            </div>
+        </div>
+        <div id="alert-box"></div>
+    <?php else: ?>
     <div class="card">
         <div class="card-title">Subir datos</div>
         <div class="card-sub">Elegí la categoría y subí uno o varios CSV. Detectamos el tipo de cada columna y cuál identifica al jugador.</div>
@@ -60,15 +97,37 @@ require __DIR__ . '/../app/views/appbar.php';
 
         <form id="upload-form">
             <div class="field">
-                <label>Categoría</label>
-                <div class="category-picker" id="category-picker">
+                <label id="categoria-label">Categoría</label>
+                <?php /* Las categorías sin habilitación se muestran DESHABILITADAS, no escondidas:
+                         una lista que cambia de tamaño según quién mire hace pensar que faltan
+                         datos. El motivo va en tres capas porque ninguna alcanza sola — candado
+                         visible (se ve de un vistazo), texto para lector de pantalla (el title no
+                         se anuncia sobre un input deshabilitado) y el renglón de abajo (el title
+                         no existe en touch, que es la mitad del uso real de esta pantalla). */ ?>
+                <div class="category-picker" id="category-picker" role="group" aria-labelledby="categoria-label">
                     <?php foreach ($categorias as $key => $label): ?>
-                        <label class="category-chip">
-                            <input type="radio" name="categoria" value="<?= $key ?>" <?= $key === 'partidos' ? 'checked' : '' ?>>
-                            <span><?= htmlspecialchars($label) ?></span>
+                        <?php $habilitada = isset($editables[$key]); ?>
+                        <?php /* El <span> se emite en UNA línea: `.category-chip span` es inline-block
+                                 y los saltos de línea del template se convertirían en espacios
+                                 visibles antes y después de la etiqueta, descentrándola. */ ?>
+                        <label class="category-chip<?= $habilitada ? '' : ' is-locked' ?>"<?= $habilitada ? '' : ' title="Necesitás la habilitación de ' . htmlspecialchars($label, ENT_QUOTES) . '"' ?>>
+                            <input type="radio" name="categoria" value="<?= htmlspecialchars($key, ENT_QUOTES) ?>"<?= $key === $catPorDefecto ? ' checked' : '' ?><?= $habilitada ? '' : ' disabled' ?>>
+                            <span><?= htmlspecialchars($label) ?><?php if (!$habilitada): ?><span class="chip-lock" aria-hidden="true">&#128274;</span><span class="sr-only"> — no habilitada: necesitás la habilitación de <?= htmlspecialchars($label) ?></span><?php endif; ?></span>
                         </label>
                     <?php endforeach; ?>
                 </div>
+                <?php if ($bloqueadas): ?>
+                    <?php /* Se enumera lo que SÍ, no lo que no: con una sola habilitación —el caso
+                             del kinesiólogo, que es para quien se hizo esto— la lista negativa son
+                             cinco nombres y la positiva uno. Cuáles están bloqueadas ya lo dicen
+                             los candados de arriba; lo que este renglón agrega es a quién pedirle
+                             lo que falta, que es la única acción posible desde acá. */ ?>
+                    <p class="field-hint">
+                        Podés cargar en:
+                        <?= htmlspecialchars(implode(', ', array_map(static fn (string $c): string => Categorias::label($c), $editablesLista))) ?>.
+                        Las demás necesitan que un administrador de tu club te las habilite.
+                    </p>
+                <?php endif; ?>
             </div>
             <div class="field" id="name-field">
                 <label for="dataset-name">Nombre del dataset (opcional)</label>
@@ -84,6 +143,7 @@ require __DIR__ . '/../app/views/appbar.php';
             </div>
         </form>
     </div>
+    <?php endif; ?>
 
     <!-- Reconciliación inline: aparece cuando hay nombres sin resolver en algún dataset -->
     <div class="card" id="recon-card" style="display:none;">
@@ -94,13 +154,27 @@ require __DIR__ . '/../app/views/appbar.php';
 
     <div class="card">
         <div class="card-title">Datasets por categoría</div>
-        <div class="card-sub"><span id="dataset-count"><?= count($datasets) ?></span> datasets en total. En cada categoría podés subir un CSV (arriba) o cargar los datos a mano sobre el plantel.</div>
+        <div class="card-sub"><span id="dataset-count"><?= count($datasets) ?></span> datasets en total.
+            <?= $puedeCargar
+                ? 'En las categorías que tenés habilitadas podés subir un CSV (arriba) o cargar los datos a mano sobre el plantel.'
+                : 'Los ves todos; para cargar hace falta tener habilitada la categoría.' ?></div>
 
         <?php foreach ($categorias as $key => $label): ?>
+            <?php $habilitada = isset($editables[$key]); ?>
             <div class="dataset-group">
                 <div class="dataset-group-head">
                     <div class="dataset-group-title"><?= htmlspecialchars($label) ?> <span class="dataset-group-count"><?= count($byCategoria[$key]) ?></span></div>
-                    <a class="btn-secondary btn btn-sm" href="carga_manual.php?categoria=<?= $key ?>">+ Cargar a mano</a>
+                    <?php if ($habilitada): ?>
+                        <a class="btn-secondary btn btn-sm" href="carga_manual.php?categoria=<?= htmlspecialchars($key, ENT_QUOTES) ?>">+ Cargar a mano</a>
+                    <?php elseif ($puedeCargar): ?>
+                        <?php /* El grupo se lista igual —los datos se leen— pero sin la acción que
+                                 va a rebotar. El motivo va como texto y no como botón gris: un
+                                 botón deshabilitado invita a volver a intentar.
+                                 Solo cuando el usuario tiene ALGUNA habilitación: si no tiene
+                                 ninguna, la card de arriba ya lo dijo una vez y repetirlo en las
+                                 seis categorías es ruido que no agrega ni un dato. */ ?>
+                        <span class="dataset-empty-note">Sin habilitación</span>
+                    <?php endif; ?>
                 </div>
                 <?php if (empty($byCategoria[$key])): ?>
                     <div class="dataset-empty-note">Sin datasets todavía.</div>
@@ -125,9 +199,15 @@ require __DIR__ . '/../app/views/appbar.php';
                                         <?php endif; ?>
                                     </div>
                                 </div>
-                                <div class="dataset-actions">
-                                    <button class="btn-icon btn-delete" data-id="<?= $d['id'] ?>">Eliminar</button>
-                                </div>
+                                <?php if ($habilitada): ?>
+                                    <?php /* Borrar un dataset es una escritura sobre esa categoría
+                                             (api/datasets.php la valida con requireCategoria). Para
+                                             quien no la tiene, el botón sería un 403 con confirm()
+                                             de por medio. */ ?>
+                                    <div class="dataset-actions">
+                                        <button class="btn-icon btn-delete" data-id="<?= $d['id'] ?>">Eliminar</button>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
                     </div>
@@ -160,6 +240,11 @@ function escapeHtml(str) {
     div.textContent = str ?? '';
     return div.innerHTML;
 }
+
+// Un usuario sin ninguna categoría habilitada no recibe el formulario de subida, así que acá no
+// hay nada que cablear. Sin este corte, el primer getElementById nulo tira el script entero y se
+// lleva puesta también la reconciliación de nombres de más abajo — que sí tiene que funcionar.
+if (form) {
 
 setupDropzone(dropzone, input, (files) => {
     selectedFiles = files;
@@ -219,6 +304,8 @@ form.addEventListener('submit', async (e) => {
     await loadReconciliation();
     setTimeout(() => window.location.reload(), 1200);
 });
+
+} // fin del bloque del uploader
 
 document.querySelectorAll('.btn-delete').forEach((btn) => {
     btn.addEventListener('click', async () => {

@@ -1,32 +1,45 @@
 <?php
 require __DIR__ . '/../app/bootstrap_page.php';
+require_once __DIR__ . '/../app/Categorias.php';
+require_once __DIR__ . '/../app/CategoryPermission.php';
 requireAuth();
 
-$categorias = [
-    'partidos'       => ['label' => 'Partidos',       'cols' => ['Distancia (m)', 'Sprints', 'Distancia sprint (m)', 'Vel. máx (km/h)', 'Player Load', 'Minutos']],
-    'entrenamientos' => ['label' => 'Entrenamientos', 'cols' => ['Duración (min)', 'RPE', 'Carga', 'Distancia (m)', 'Player Load']],
-    'fuerza'         => ['label' => 'Fuerza',          'cols' => ['Peso corporal (kg)', 'Press plano (kg)', 'Sentadilla (kg)', 'Peso muerto (kg)', 'Dominadas (reps)']],
-    'nutricion'      => ['label' => 'Nutrición',       'cols' => ['Peso (kg)', '% graso', 'Masa muscular (kg)', 'Hidratación (L)']],
-    'otros'          => ['label' => 'Otros datos',     'cols' => ['Valor 1', 'Valor 2']],
-];
-
-$categoria = $_GET['categoria'] ?? 'otros';
-if (!isset($categorias[$categoria])) {
-    $categoria = 'otros';
+// La categoría llega por query string. Un valor fuera del catálogo no cae a `otros`: se vuelve a
+// la pantalla que tiene el selector. Degradar en silencio a `otros` significaba abrir la grilla de
+// una categoría que el usuario no pidió —y desde que la categoría decide permisos, posiblemente
+// una en la que sí puede escribir— por un link mal tipeado.
+$categoria = Categorias::normalizar($_GET['categoria'] ?? null);
+if ($categoria === null) {
+    header('Location: datos.php');
+    exit;
 }
-$cat = $categorias[$categoria];
 
-$pageTitle = 'Cargar a mano — ' . $cat['label'];
+$catLabel   = Categorias::label($categoria);
+$catColumns = Categorias::columnasSugeridas($categoria);
+
+/**
+ * ¿Puede esta sesión escribir esta categoría?
+ *
+ * api/manual_dataset.php ya corta con 403 al guardar. Esto evita renderizar una grilla editable de
+ * 30 jugadores × N columnas para que el rechazo llegue recién cuando el usuario apreta "Guardar":
+ * el trabajo perdido sería toda la carga a mano de una sesión.
+ */
+$puedeEditar = CategoryPermission::puedeEditarCategoria($categoria);
+
+$pageTitle = 'Cargar a mano — ' . $catLabel;
 $currentStep = 2;
 
-$pdo = Database::get();
-// Las filas de la grilla de carga SON el plantel: sin el filtro por club, un club cargaría datos
-// sobre los jugadores de otro.
-$stmt = $pdo->prepare(
-    'SELECT id, nombre, familia, sub_familia FROM players WHERE club_id = :club ORDER BY nombre'
-);
-$stmt->execute(['club' => Auth::clubId()]);
-$players = $stmt->fetchAll();
+$players = [];
+if ($puedeEditar) {
+    $pdo = Database::get();
+    // Las filas de la grilla de carga SON el plantel: sin el filtro por club, un club cargaría
+    // datos sobre los jugadores de otro.
+    $stmt = $pdo->prepare(
+        'SELECT id, nombre, familia, sub_familia FROM players WHERE club_id = :club ORDER BY nombre'
+    );
+    $stmt->execute(['club' => Auth::clubId()]);
+    $players = $stmt->fetchAll();
+}
 
 require __DIR__ . '/../app/views/head.php';
 ?>
@@ -34,11 +47,23 @@ require __DIR__ . '/../app/views/head.php';
     <?php require __DIR__ . '/../app/views/confignav.php'; ?>
 
     <div class="page-header">
-        <h1 class="page-title">Cargar a mano — <?= htmlspecialchars($cat['label']) ?></h1>
-        <p class="page-sub">Las filas ya son los jugadores del plantel (quedan matcheados solos). Ajustá las columnas si querés, completá los valores y guardá. Los jugadores que dejes en blanco no se guardan.</p>
+        <h1 class="page-title">Cargar a mano — <?= htmlspecialchars($catLabel) ?></h1>
+        <p class="page-sub"><?= $puedeEditar
+            ? 'Las filas ya son los jugadores del plantel (quedan matcheados solos). Ajustá las columnas si querés, completá los valores y guardá. Los jugadores que dejes en blanco no se guardan.'
+            : 'Esta categoría no está entre las que tenés habilitadas.' ?></p>
     </div>
 
-    <?php if (empty($players)): ?>
+    <?php if (!$puedeEditar): ?>
+        <?php /* Sin habilitación NO se renderiza la grilla, ni siquiera deshabilitada: sería una
+                 planilla entera del plantel invitando a completarla para rebotar al guardar. */ ?>
+        <div class="card">
+            <div class="empty-state">
+                Para cargar datos de <?= htmlspecialchars($catLabel) ?> necesitás esa categoría habilitada.
+                Te la da un administrador de tu club. Mientras tanto podés ver todo lo que ya está cargado.
+                <br><a href="datos.php">Volver a Datos</a>.
+            </div>
+        </div>
+    <?php elseif (empty($players)): ?>
         <div class="card">
             <div class="empty-state">Primero cargá el plantel. <a href="plantel.php">Ir a Plantel</a>.</div>
         </div>
@@ -49,7 +74,7 @@ require __DIR__ . '/../app/views/head.php';
             <div class="field-row">
                 <div class="field">
                     <label for="ds-nombre">Nombre del dataset</label>
-                    <input type="text" id="ds-nombre" placeholder="Ej: <?= htmlspecialchars($cat['label']) ?> — Mayo 2026">
+                    <input type="text" id="ds-nombre" placeholder="Ej: <?= htmlspecialchars($catLabel) ?> — Mayo 2026">
                 </div>
                 <div class="field" style="align-self:flex-end;">
                     <button type="button" class="btn-secondary btn" id="add-col-btn">+ Agregar columna</button>
@@ -68,12 +93,13 @@ require __DIR__ . '/../app/views/head.php';
     <?php endif; ?>
 </div>
 
+<?php if ($puedeEditar && !empty($players)): ?>
 <script src="<?= asset('../js/api.js') ?>"></script>
 <script src="<?= asset('../js/wizard.js') ?>"></script>
 <script>
 const CATEGORIA = <?= json_encode($categoria) ?>;
 const PLAYERS = <?= json_encode(array_map(fn($p) => ['id' => (int) $p['id'], 'nombre' => $p['nombre'], 'sub_familia' => $p['sub_familia']], $players), JSON_UNESCAPED_UNICODE) ?>;
-let columns = <?= json_encode($cat['cols'], JSON_UNESCAPED_UNICODE) ?>;
+let columns = <?= json_encode(array_values($catColumns), JSON_UNESCAPED_UNICODE) ?>;
 const values = {}; // values[playerId][colName] = string
 
 function escapeHtml(str) {
@@ -179,5 +205,6 @@ document.getElementById('save-btn')?.addEventListener('click', async () => {
 
 renderGrid();
 </script>
+<?php endif; ?>
 </body>
 </html>
