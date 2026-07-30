@@ -8,8 +8,10 @@ require_once __DIR__ . '/Auth.php';
 
 /**
  * Genera UN widget a partir de un nombre + prompt en lenguaje natural del preparador físico.
- * Reemplaza al ViewGenerator (que generaba el dashboard entero de una): acá el PF arma la vista
- * widget por widget desde el panel SportAnalysis.
+ *
+ * Reemplazó a la clase ViewGenerator, que generaba el dashboard entero de una sola vez y fue
+ * eliminada junto con api/generate.php (quedó sin un solo caller). Acá el PF arma la vista widget
+ * por widget desde el panel SportAnalysis; para las vistas base del club está BaseViewGenerator.
  *
  * La IA interpreta el pedido, elige tipo/columnas/agregación y decide qué datasets cruzar
  * (config.dataset_ids). Si el pedido es ambiguo, en vez de un widget devuelve preguntas para

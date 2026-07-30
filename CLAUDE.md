@@ -91,6 +91,51 @@ rg -n --pcre2 '(FROM|INTO|UPDATE|JOIN)\s+(players|datasets|dataset_rows|name_rec
 Cada hit va con `club_id` o con un comentario que justifique la excepción. Y `sql/verify_isolation.sql`
 tiene que dar 0 en todos sus chequeos.
 
+## Permisos y verificación de membresía
+
+Hay **dos campos distintos y no hay que mezclarlos**:
+
+- **`users.rol`** — etiqueta libre de texto ("preparador físico", "kinesiólogo"). Se muestra en el
+  perfil y **no gatea absolutamente nada**.
+- **`users.nivel`** — permisos reales: `miembro` / `admin_club` / `superadmin`.
+
+**El registro no habilita.** Un alta nace `status='pending'` y solo ve `verificacion.php`, donde
+deja evidencia de que pertenece al club (Instagram, nº de socio, link a una foto — **siempre un
+link, nunca un archivo subido**: el proyecto no escribe archivos a disco y no vale la pena abrir
+esa superficie). El superadmin valida al primero de cada club desde `admin.php` y lo promueve a
+`admin_club`; ese administrador aprueba a los demás **de su club**.
+
+Un `pending` **puede loguearse** a propósito: si no, no tendría cómo ver en qué estado quedó su
+solicitud ni corregirla. Los guards deciden qué puede usar, no el login. La API le responde **403
+(no 401)**: un 401 hace que `js/api.js` lo mande a login y eso sería un loop infinito.
+
+`Auth::requireNivel()` **compara exacto, sin jerarquía**: `requireNivel('admin_club')` corta a un
+superadmin. Escribir siempre los dos, o usar `Auth::esAdminClub()`.
+
+Al validar URLs que carga un usuario, `filter_var($u, FILTER_VALIDATE_URL)` **no alcanza**: deja
+pasar `javascript://comentario%0Aalert(1)` y `file:///etc/passwd`. Hay que exigir el esquema
+http/https con `parse_url` y revalidar al emitir el `href`.
+
+## Vistas: del club vs. privadas
+
+- **`views.user_id IS NULL`** → vista base del club (una por categoría de datos + un overview por
+  jugador). La ven todos los miembros; solo un `admin_club` la modifica o regenera.
+- **`views.user_id = X`** → privada de X. Nace así toda vista creada a mano o con IA.
+
+Predicado de visibilidad, generado en un solo lugar (`Scope::sqlVistaVisible()`), **nunca escrito
+a mano**: `club_id = :club AND (user_id IS NULL OR user_id = :user)`.
+
+`widgets`, `custom_metrics` y `view_filters` no tienen `user_id`: heredan la visibilidad de su
+vista padre vía JOIN. A diferencia de `club_id`, acá **no se denormaliza** — una fuga entre
+usuarios del mismo club expone el layout de un tablero, no datos que el otro no pudiera ver.
+
+**Los códigos de corte son distintos y confundirlos es el bug**: contra una vista privada ajena va
+**404** (un 403 confirmaría que existe); contra una vista del club sin permiso va **403** (un 404
+le mentiría diciéndole que su propia vista no existe).
+
+El orden de las tabs vive en **`view_order (user_id, view_id, position)`**, no en
+`views.position`: esa es una sola columna compartida y reordenar le cambiaba el orden a todo el club.
+
 ## Flujo de usuario
 
 ```
@@ -161,10 +206,8 @@ Las **métricas configurables** (fórmula simple entre columnas numéricas del m
 ## Fuera de scope explícito para este MVP
 
 - "Mejorar con IA" a nivel de vista completa (varios widgets a la vez).
-- Roles con permisos. El `rol` del usuario es una **etiqueta libre de texto** (preparador físico,
-  entrenador, médico...) que se muestra en el perfil: no gatea ninguna acción. Todos los miembros
-  de un club pueden hacer lo mismo.
 - Recuperación de contraseña por mail (no hay infraestructura de envío en el hosting compartido).
+  Resetear una contraseña hoy es un `UPDATE` a mano sobre `users.password_hash`.
 - Exportar PDF con diseño cuidado (versión básica alcanza).
 - Persistencia de plantel versionado.
 - Métricas derivadas complejas tipo ACWR, o cruces entre datasets distintos en las métricas configurables.
