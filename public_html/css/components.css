@@ -437,24 +437,9 @@ select {
 }
 
 /* Dashboard: view tabs */
-/* Barra de tabs: las tabs inline scrollean horizontal; el desplegable de jugadores y
-   "+ Nueva vista" quedan fuera del contenedor con overflow para no ser recortados. */
-.view-tabs-bar {
-    display: flex;
-    align-items: flex-end;
-    gap: 4px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: var(--space-6);
-}
-
-.view-tabs {
-    display: flex;
-    gap: 4px;
-    overflow-x: auto;
-    flex: 1 1 auto;
-    min-width: 0;
-}
-
+/* .view-tabs-bar y .view-tabs (una sola fila con overflow-x: auto) se eliminaron: el scrollbar
+   nativo cortaba el último nombre por la mitad y crecía con cada vista privada nueva. La barra
+   vive ahora en .view-rail / .vrail-row / .vrail-tabs, al final de este archivo. */
 .view-tab {
     position: relative;
     padding: 10px 16px;
@@ -2294,3 +2279,183 @@ button.view-tab-add:hover { color: var(--text); }
     /* En mobile el appbar ya va justo de ancho: queda el chip de iniciales, se cae el nombre. */
     .appbar-user-name { display: none; }
 }
+
+/* ============================================================
+   BARRA DE VISTAS — dos filas por origen (club / propias)
+   ------------------------------------------------------------
+   Reemplaza a .view-tabs-bar + .view-tabs, que eran UNA fila con `overflow-x: auto`. Con 8 tabs
+   ese contenedor sacaba un scrollbar nativo que cortaba el último nombre por la mitad, y el
+   problema crecía solo: cada vista privada que crea el usuario suma una tab.
+
+   Acá NO HAY NINGÚN overflow-x: auto, y no puede volver a aparecer: `.vrail-tabs` recorta con
+   `overflow: hidden` y js/widgets.js (layoutViewRow) esconde las tabs que no entran mandándolas
+   al menú "+N ▾" de esa misma fila. El recorte es solo la red de seguridad de la medición.
+
+   Casi todo se reusa: las tabs son `.view-tab` tal cual, el "+N ▾" y el "Jugadores ▾" son
+   `button.view-tab-players` dentro de `.tb-menu-wrap` + `.widget-menu`.`.players-menu` les da el
+   scroll vertical y el ancho mínimo. Lo único nuevo es el andamiaje de las dos filas.
+
+   El prefijo `vrail-` y no `view-row-`: `.view-row` YA EXISTE más arriba (línea ~267, la card de
+   la lista de vistas) con `padding: 16px` y borde. Reusar ese nombre inflaba cada fila de 37px a
+   70px sin que ninguna regla nueva lo dijera. No renombrarlas de vuelta.
+
+   Markup: ver steps/analysis.php (#view-rail).
+   ============================================================ */
+.view-rail {
+    margin-bottom: var(--space-6);
+}
+
+/* Cada fila trae su propio hairline inferior: es la línea sobre la que se apoya el subrayado
+   `.view-tab::after` de la tab activa de ESA fila. */
+.vrail-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    min-height: 36px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* "DEL CLUB" / "MÍAS" en el registro mono uppercase del sistema (mismo que .confignav-label y
+   .appbar-sub). --text-faint sobre --bg pasa AA (el token está elegido para eso). */
+.vrail-label {
+    flex: 0 0 auto;
+    min-width: 62px;
+    padding-bottom: 9px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-faint);
+    white-space: nowrap;
+}
+.vrl-abbr { display: none; }
+
+/* `flex: 0 1 auto` (encoge, no crece) a propósito: con `1 1 auto` la lista estiraba hasta el
+   borde derecho y empujaba "Jugadores ▾" lejos de las tabs a las que pertenece. */
+.vrail-tabs {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* Todo lo que no sea la lista de tabs es inencogible: cuando falta ancho, el único que cede es
+   `.vrail-tabs`, que es el que sabe mandar tabs al menú de desborde. */
+.vrail-overflow {
+    flex: 0 0 auto;
+    align-self: stretch;
+    display: inline-flex;
+    align-items: flex-end;
+}
+.view-rail .view-tabs-players { flex: 0 0 auto; }
+
+/* El `[hidden]` del user agent pierde contra CUALQUIER `display` de autor, y estos dos nacen
+   ocultos desde el servidor (el "+N ▾" hasta que se mide la fila; "Generar con IA" hasta que se
+   sabe si dice "Generar" o "Regenerar"). Sin esta regla se verían siempre. Es el mismo motivo
+   por el que ya existe `.widget-menu[hidden]`. */
+.vrail-overflow[hidden],
+.btn[hidden] { display: none; }
+
+.view-rail .view-tab {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    /* Más compacto que el default (10px 16px): la barra come alto arriba del tablero, que es lo
+       que el usuario vino a mirar, y ahora son dos filas en vez de una. */
+    padding: 7px 12px;
+    max-width: 22ch;
+}
+.vrail-tabs .view-tab { cursor: grab; }
+.vrail-tabs .view-tab.dragging { cursor: grabbing; }
+
+/* El nombre trunca en vez de empujar. El `title` con el nombre completo lo pone analysis.php. */
+.view-tab-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Estado que aplica layoutViewRow() a las tabs que se fueron al menú "+N ▾". */
+.view-tab.is-collapsed { display: none; }
+
+/* El anillo de foco va hacia adentro: con el `outline-offset: 2px` global lo recortaría el
+   `overflow: hidden` de la fila justo en la primera y la última tab visible. */
+.view-rail .view-tab:focus-visible,
+.view-rail .view-tab-add:focus-visible {
+    outline-offset: -2px;
+}
+
+.view-rail .view-tab-add {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;   /* empuja "+ Nueva vista" al extremo derecho de su fila */
+    padding: 7px 12px;
+    white-space: nowrap;
+}
+.vta-abbr { display: none; }
+
+/* Fila del club vacía: el club todavía no generó sus vistas base. */
+.vrail-empty {
+    flex: 0 0 auto;
+    padding: 8px 4px 9px;
+    font-size: 12.5px;
+    color: var(--text-faint);
+}
+.vrail-cta {
+    flex: 0 0 auto;
+    gap: 6px;
+    max-width: none;   /* no es un nombre de vista: no se trunca a 22ch */
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-family: inherit;
+    color: var(--accent-strong);   /* --accent no llega a AA a 13.5px sobre --bg */
+}
+.vrail-cta::after { content: none; }   /* no es una tab navegable: sin subrayado deslizante */
+
+@media (max-width: 720px) {
+    /* Dos filas + etiquetas es mucho ancho en 390px: las etiquetas pasan a su forma corta
+       ("CLUB"), "+ Nueva vista" a "+ Nueva", y las tabs truncan antes. La estructura de dos
+       filas se mantiene: es la que hace que el origen de cada vista se lea sin chips. */
+    .view-rail { margin-bottom: var(--space-5); }
+    .vrail-label {
+        min-width: 38px;
+        letter-spacing: 0.08em;
+    }
+    .vrl-full { display: none; }
+    .vrl-abbr { display: inline; }
+    .vta-full { display: none; }
+    .vta-abbr { display: inline; }
+    .view-rail .view-tab { max-width: 13ch; padding: 7px 10px; }
+    .view-rail .view-tab-add { padding: 7px 10px; }
+}
+
+/* Tablet al borde de la cancha: todo lo tocable de la barra llega a 44px. */
+@media (pointer: coarse) {
+    .view-rail .view-tab,
+    .view-rail .view-tab-add { min-height: 44px; }
+    .vrail-row { min-height: 46px; }
+}
+
+/* ---- Toolbar del tablero: acciones de la derecha ----
+   "Generar/Regenerar con IA" (secundario) + "Agregar widget" (primario) van juntos y en ese
+   orden: el destructivo nunca queda pegado al borde donde cae el pulgar. */
+.tb-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+/* Mientras un botón carga, el spark ✦ deja lugar al spinner: dos marcas de "está pasando algo"
+   compiten y ninguna se lee. */
+.btn.is-loading .btn-spark { display: none; }
+
+/* La generación de una vista entera tarda ~60s: el skeleton .ai-thinking ocupa la grilla completa
+   en vez de una sola columna de 12, que se leería como un widget roto. */
+.dash-grid > .ai-thinking { grid-column: 1 / -1; }

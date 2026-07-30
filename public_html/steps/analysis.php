@@ -31,12 +31,28 @@ $stmt = $pdo->prepare(
 $stmt->execute(['club' => $clubId, 'user' => $userId, 'user_order' => $userId]);
 $views = $stmt->fetchAll();
 
-// Las vistas de jugador (overview) se agrupan aparte, en un desplegable, para no llenar la barra
-// de tabs con 30+ jugadores. Las manuales y de cluster van como tabs inline.
+// La vista por defecto es la primera que NO sea un overview por jugador: aterrizar en el tablero
+// de un jugador suelto no le dice nada a nadie.
 $mainViews = array_values(array_filter($views, fn($v) => $v['tipo'] !== 'player'));
-$playerViews = array_values(array_filter($views, fn($v) => $v['tipo'] === 'player'));
-
 $defaultViewId = (int) ($mainViews[0]['id'] ?? ($views[0]['id'] ?? 0));
+
+// La barra de vistas se parte en DOS FILAS por origen: "Del club" (user_id NULL, las ve todo el
+// club) y "Mías" (privadas de esta sesión). La fila ya dice de quién es cada vista, así que el
+// chip "club" por tab desaparece: era ruido repetido en una barra que se escanea de un vistazo.
+//
+// Dentro de cada fila se vuelve a separar entre tabs inline y overviews por jugador, porque una
+// fila con 37 jugadores no entra en ninguna pantalla. En la práctica los overviews son siempre
+// del club (los genera BaseViewGenerator con user_id NULL), pero el split se hace por fila y no
+// a mano para que una vista tipo 'player' privada — hoy imposible, mañana quizás — caiga sola en
+// la fila correcta en vez de aparecer bajo "Del club".
+$splitRow = static function (array $rowViews): array {
+    return [
+        array_values(array_filter($rowViews, fn($v) => $v['tipo'] !== 'player')),
+        array_values(array_filter($rowViews, fn($v) => $v['tipo'] === 'player')),
+    ];
+};
+[$clubTabs, $clubPlayerViews] = $splitRow(array_filter($views, fn($v) => Scope::esVistaDelClub($v)));
+[$myTabs, $myPlayerViews] = $splitRow(array_filter($views, fn($v) => !Scope::esVistaDelClub($v)));
 
 // `?view_id=` viene del cliente: sin validar, alguien pega el id de una vista de otro club y le
 // renderizamos el tablero entero. Scope::find() devuelve la fila solo si es del club de la sesión.
@@ -46,11 +62,6 @@ $requestedViewId = (int) ($_GET['view_id'] ?? 0);
 $activeViewId = ($requestedViewId > 0 && Scope::find($pdo, 'views', $requestedViewId) !== null)
     ? $requestedViewId
     : $defaultViewId;
-
-$activePlayerView = null;
-foreach ($playerViews as $pv) {
-    if ($pv['id'] == $activeViewId) { $activePlayerView = $pv; break; }
-}
 
 $activeView = null;
 foreach ($views as $vv) {
@@ -62,16 +73,6 @@ $activeViewName = $activeView['nombre'] ?? '';
 // default seguro es el que menos permite.
 $activeViewEsDelClub = $activeView === null ? true : Scope::esVistaDelClub($activeView);
 $puedeEditarVistaActiva = $esAdminClub || !$activeViewEsDelClub;
-
-// El chip de propiedad solo aparece cuando hay algo que distinguir: si TODAS las vistas visibles
-// son del club (el caso de un club recién migrado) o todas son propias, marcarlas una por una es
-// ruido puro sobre una barra que el usuario escanea en medio de un entrenamiento.
-$hayVistasDelClub = false;
-$hayVistasPropias = false;
-foreach ($views as $vv) {
-    if (Scope::esVistaDelClub($vv)) { $hayVistasDelClub = true; } else { $hayVistasPropias = true; }
-}
-$mostrarChipDueno = $hayVistasDelClub && $hayVistasPropias;
 
 // Todos los datasets están disponibles para cualquier widget (el cruce lo decide cada widget).
 $stmt = $pdo->prepare(
@@ -120,6 +121,71 @@ foreach ($stmt->fetchAll() as $p) {
 }
 foreach ($dimValues as $k => $v) { $dimValues[$k] = array_keys($v); }
 
+/**
+ * Tabs inline de una fila. El `title` lleva el nombre completo porque el nombre visible se trunca
+ * con ellipsis (una vista "Impacto acumulado de la pretemporada" no puede empujar a las demás).
+ */
+function viewTabsHtml(array $tabs, int $activeViewId): string
+{
+    $out = '';
+    foreach ($tabs as $v) {
+        $nombre = htmlspecialchars($v['nombre']);
+        $out .= '<a class="view-tab' . ($v['id'] == $activeViewId ? ' active' : '') . '"'
+            . ' href="?view_id=' . (int) $v['id'] . '"'
+            . ' data-view-id="' . (int) $v['id'] . '"'
+            . ' title="' . $nombre . '">'
+            . '<span class="view-tab-name">' . $nombre . '</span></a>';
+    }
+    return $out;
+}
+
+/**
+ * Desplegable de overviews por jugador de una fila. Devuelve '' si la fila no tiene ninguno, así
+ * la fila "Mías" no arrastra un control vacío en el caso normal (los overviews son del club).
+ */
+function viewPlayersHtml(array $players, int $activeViewId, string $slug): string
+{
+    if (empty($players)) return '';
+    $activo = null;
+    foreach ($players as $pv) {
+        if ($pv['id'] == $activeViewId) { $activo = $pv; break; }
+    }
+    $btnId = 'players-menu-btn-' . $slug;
+    $menuId = 'players-menu-' . $slug;
+    $label = $activo ? htmlspecialchars(str_replace('Overview — ', '', $activo['nombre'])) : 'Jugadores';
+
+    $items = '';
+    foreach ($players as $pv) {
+        $items .= '<a class="widget-menu-item' . ($pv['id'] == $activeViewId ? ' active' : '') . '"'
+            . ' role="menuitem" href="?view_id=' . (int) $pv['id'] . '">'
+            . '<span class="wm-icon" aria-hidden="true">&#128100;</span> '
+            . htmlspecialchars(str_replace('Overview — ', '', $pv['nombre'])) . '</a>';
+    }
+
+    return '<div class="tb-menu-wrap view-tabs-players">'
+        . '<button class="view-tab view-tab-players' . ($activo ? ' active' : '') . '" id="' . $btnId . '" type="button"'
+        . ' aria-haspopup="menu" aria-expanded="false" aria-controls="' . $menuId . '">'
+        . '<span class="view-tab-name">' . $label . '</span> &#9662;</button>'
+        . '<div class="widget-menu players-menu" id="' . $menuId . '" role="menu" hidden>' . $items . '</div>'
+        . '</div>';
+}
+
+/**
+ * Menú de desborde de una fila ("+3 ▾"). Nace vacío y oculto: quién entra y quién no depende del
+ * ancho real, que solo se conoce en el cliente. js/widgets.js lo llena en cada layout. Reutiliza
+ * el par .tb-menu-wrap + .widget-menu de la toolbar, y .players-menu para el scroll interno.
+ */
+function viewOverflowHtml(string $slug): string
+{
+    $btnId = 'view-more-btn-' . $slug;
+    $menuId = 'view-more-menu-' . $slug;
+    return '<div class="tb-menu-wrap vrail-overflow" id="view-more-' . $slug . '" hidden>'
+        . '<button class="view-tab view-tab-players vrail-more" id="' . $btnId . '" type="button"'
+        . ' aria-haspopup="menu" aria-expanded="false" aria-controls="' . $menuId . '">+0 &#9662;</button>'
+        . '<div class="widget-menu players-menu" id="' . $menuId . '" role="menu" hidden></div>'
+        . '</div>';
+}
+
 require __DIR__ . '/../app/views/head.php';
 ?>
 <?php require __DIR__ . '/../app/views/appbar.php'; ?>
@@ -132,28 +198,39 @@ require __DIR__ . '/../app/views/head.php';
             </div>
         </div>
     <?php else: ?>
-        <div class="view-tabs-bar">
-            <nav class="view-tabs" id="view-tabs">
-                <?php foreach ($mainViews as $v): ?>
-                    <?php $vEsDelClub = Scope::esVistaDelClub($v); ?>
-                    <a class="view-tab <?= $v['id'] == $activeViewId ? 'active' : '' ?>" href="?view_id=<?= $v['id'] ?>" data-view-id="<?= $v['id'] ?>" title="Arrastrá para reordenar"><?= htmlspecialchars($v['nombre']) ?><?php if ($mostrarChipDueno && $vEsDelClub): ?> <span class="tag">club</span><?php endif; ?></a>
-                <?php endforeach; ?>
-            </nav>
-            <?php if (!empty($playerViews)): ?>
-                <div class="tb-menu-wrap view-tabs-players">
-                    <button class="view-tab view-tab-players <?= $activePlayerView ? 'active' : '' ?>" id="players-menu-btn" type="button"
-                            aria-haspopup="menu" aria-expanded="false" aria-controls="players-menu">
-                        <?= $activePlayerView ? htmlspecialchars(str_replace('Overview — ', '', $activePlayerView['nombre'])) : 'Jugadores' ?> ▾
-                    </button>
-                    <div class="widget-menu players-menu" id="players-menu" role="menu" hidden>
-                        <?php foreach ($playerViews as $pv): ?>
-                            <a class="widget-menu-item <?= $pv['id'] == $activeViewId ? 'active' : '' ?>" role="menuitem" href="?view_id=<?= $pv['id'] ?>"><span class="wm-icon" aria-hidden="true">👤</span> <?= htmlspecialchars(str_replace('Overview — ', '', $pv['nombre'])) ?><?php if ($mostrarChipDueno && Scope::esVistaDelClub($pv)): ?> <span class="tag">club</span><?php endif; ?></a>
-                        <?php endforeach; ?>
-                    </div>
+        <?php if (!empty($views)): ?>
+            <!-- Barra de vistas en dos filas por origen. Ninguna fila scrollea: lo que no entra
+                 en el ancho real lo manda js/widgets.js al menú "+N ▾" de esa misma fila. Con
+                 cero vistas la barra no se renderiza — la card de abajo ya explica todo y dos
+                 filas casi vacías arriba de ella serían puro alto perdido. -->
+            <div class="view-rail" id="view-rail">
+                <div class="vrail-row" data-row="club">
+                    <span class="vrail-label" id="vrail-label-club"><span class="vrl-full">Del club</span><span class="vrl-abbr">Club</span></span>
+                    <nav class="vrail-tabs" id="view-tabs-club" aria-labelledby="vrail-label-club"><?= viewTabsHtml($clubTabs, $activeViewId) ?></nav>
+                    <?= viewOverflowHtml('club') ?>
+                    <?= viewPlayersHtml($clubPlayerViews, $activeViewId, 'club') ?>
+                    <?php if (empty($clubTabs) && empty($clubPlayerViews)): ?>
+                        <?php if ($esAdminClub): ?>
+                            <button class="view-tab vrail-cta" id="gen-base-btn-row" type="button"><span aria-hidden="true">✦</span> Generar vistas base</button>
+                        <?php else: ?>
+                            <!-- Un miembro no puede generar las vistas base: se le dice el estado,
+                                 no se le ofrece un botón que el servidor va a rechazar. -->
+                            <span class="vrail-empty">Tu club todavía no tiene vistas base.</span>
+                        <?php endif; ?>
+                    <?php endif; ?>
                 </div>
-            <?php endif; ?>
-            <button class="view-tab-add" id="add-view-btn" type="button">+ Nueva vista</button>
-        </div>
+                <!-- La fila "Mías" mantiene su etiqueta aunque esté vacía: es donde va a caer lo
+                     que el usuario cree, y con la etiqueta puesta "+ Nueva vista" se lee como
+                     "creá una vista tuya" y no como "creá una vista del club". -->
+                <div class="vrail-row" data-row="mine">
+                    <span class="vrail-label" id="vrail-label-mine"><span class="vrl-full">Mías</span><span class="vrl-abbr">Mías</span></span>
+                    <nav class="vrail-tabs" id="view-tabs-mine" aria-labelledby="vrail-label-mine"><?= viewTabsHtml($myTabs, $activeViewId) ?></nav>
+                    <?= viewOverflowHtml('mine') ?>
+                    <?= viewPlayersHtml($myPlayerViews, $activeViewId, 'mine') ?>
+                    <button class="view-tab-add" id="add-view-btn" type="button">+ <span class="vta-full">Nueva vista</span><span class="vta-abbr">Nueva</span></button>
+                </div>
+            </div>
+        <?php endif; ?>
 
         <?php if (empty($views)): ?>
             <?php if ($esAdminClub): ?>
@@ -225,7 +302,20 @@ require __DIR__ . '/../app/views/head.php';
                          api/widgets.php validan por vista). Para un miembro, la CTA más grande de
                          la pantalla sería un 403 asegurado: no se renderiza. Los controles de cada
                          widget los saca js/widgets.js con el mismo criterio. -->
-                    <button class="btn" id="add-widget-btn" type="button"><span class="btn-spark" aria-hidden="true">✦</span> Agregar widget</button>
+                    <div class="tb-right">
+                        <!-- Generar / Regenerar la vista entera. Nace hidden y sin rótulo fijo: el
+                             texto depende de si la vista ya tiene widgets, y eso solo se sabe
+                             cuando responde api/widgets.php. Mostrarlo antes haría parpadear
+                             "Generar" → "Regenerar", que es justo la diferencia entre una acción
+                             inocua y una destructiva. loadWidgets() lo revela con el rótulo bueno. -->
+                        <button class="btn-secondary btn btn-swap-label" id="generate-view-btn" type="button" hidden>
+                            <span class="btn-spinner" aria-hidden="true"></span>
+                            <span class="btn-spark" aria-hidden="true">✦</span>
+                            <span class="btn-label">Generar con IA</span>
+                            <span class="btn-loading-label">Generando…</span>
+                        </button>
+                        <button class="btn" id="add-widget-btn" type="button"><span class="btn-spark" aria-hidden="true">✦</span> Agregar widget</button>
+                    </div>
                 <?php endif; ?>
             </div>
 
@@ -248,7 +338,21 @@ require __DIR__ . '/../app/views/head.php';
             <label for="view-name-input">Nombre de la vista</label>
             <input type="text" id="view-name-input" placeholder="Ej: Carga de partidos">
         </div>
-        <div class="btn-row"><button class="btn" id="view-create-btn" type="button">Crear vista</button></div>
+        <!-- La descripción NO es metadata administrativa: es el pedido con el que la IA arma el
+             tablero entero. Se oculta al renombrar (renombrar no regenera nada). -->
+        <div class="field" id="view-desc-field">
+            <label for="view-desc-input">¿Qué querés ver en esta vista?</label>
+            <textarea id="view-desc-input" placeholder="Ej: Quiero ver la distancia total por partido, un ranking de sprints por jugador y la comparación backs vs forwards"></textarea>
+            <div class="field-hint">Describilo con tus palabras y la IA arma los widgets sola — puede tardar hasta un minuto. Si lo dejás vacío, la vista nace en blanco y la armás a mano.</div>
+        </div>
+        <div class="btn-row">
+            <button class="btn btn-swap-label" id="view-create-btn" type="button">
+                <span class="btn-spinner" aria-hidden="true"></span>
+                <span class="btn-label">Crear vista</span>
+                <span class="btn-loading-label">Creando…</span>
+            </button>
+        </div>
+        <div id="view-modal-progress"></div>
     </div>
 </div>
 

@@ -35,10 +35,14 @@ function handleSave(PDO $pdo): void
 {
     $id = (int) ($_POST['id'] ?? 0);
     $nombre = trim($_POST['nombre'] ?? '');
+    // La `description` NO es una nota al pie: es EL PROMPT con el que api/generate.php arma la
+    // grilla entera de la vista (ViewGenerator la lee de la fila, no la recibe por parámetro).
     $description = trim($_POST['description'] ?? '');
     // Una vista es un tab de SportAnalysis que se llena con widgets. No requiere descripción ni
-    // datasets pre-asignados: cada widget elige sus propios datasets al crearse.
+    // datasets pre-asignados: cada widget elige sus propios datasets al crearse, y si no hay
+    // ninguno asignado el generador le ofrece a la IA todos los del club.
     $datasetIds = array_map('intval', $_POST['dataset_ids'] ?? []);
+    $esNueva = $id <= 0;
 
     // Ambos vienen del cliente. La vista, porque el UPDATE de abajo apuntaría a una ajena; los
     // datasets, porque viajan a un INSERT en view_datasets (donde no hay WHERE que los filtre).
@@ -109,7 +113,25 @@ function handleSave(PDO $pdo): void
         respondError(500, 'Error al guardar la vista: ' . $e->getMessage());
     }
 
-    echo json_encode(['ok' => true, 'id' => $id, 'nombre' => $nombre]);
+    // `should_generate` le dice al cliente que corresponde encadenar un POST a api/generate.php con
+    // este id. Se decide acá y no en el navegador para que la regla viva de un solo lado.
+    //
+    // POR QUÉ NO SE GENERA ACÁ MISMO. La llamada a la IA tarda ~60s y este endpoint no está armado
+    // para eso: no hace session_write_close() (dejaría el lock de sesión tomado un minuto, colgando
+    // todas las requests del usuario) ni sube el max_execution_time. api/generate.php sí hace las
+    // dos cosas. Además, en dos pasos la UI puede mostrar "generando…" en vez de un formulario
+    // congelado, y si la IA falla la vista igual quedó creada.
+    //
+    // Solo en el ALTA: sobre una vista que ya existe, regenerar es destructivo (generate() borra los
+    // widgets actuales), y guardar un cambio de nombre no puede tener ese efecto de lado. Regenerar
+    // una vista existente es un botón aparte y explícito.
+    echo json_encode([
+        'ok' => true,
+        'id' => $id,
+        'nombre' => $nombre,
+        'created' => $esNueva,
+        'should_generate' => $esNueva && $description !== '',
+    ]);
 }
 
 /**

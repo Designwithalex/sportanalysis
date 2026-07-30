@@ -66,6 +66,8 @@ async function loadWidgets() {
         const result = await Api.get(`../api/widgets.php?view_id=${ACTIVE_VIEW_ID}`);
         currentWidgets = result.widgets;
         grid.innerHTML = '';
+        // El rótulo del botón de generación depende de cuántos widgets hay: recién acá se sabe.
+        refreshGenerateButton();
 
         if (currentWidgets.length === 0) {
             renderAiHero(grid);
@@ -77,6 +79,8 @@ async function loadWidgets() {
         wireTableSearch(grid);
     } catch (err) {
         grid.innerHTML = `<div class="alert alert-error">${escapeHtml(err.message)}</div>`;
+        // Sin saber cuántos widgets hay no se puede ofrecer "Regenerar": el confirm mentiría
+        // sobre cuántos va a reemplazar. El botón queda escondido hasta que la grilla cargue.
     }
 }
 
@@ -1153,16 +1157,39 @@ function showViewAlert(message, type = 'error') {
 function setupViewModal() {
     const modal = document.getElementById('view-modal');
     const nameInput = document.getElementById('view-name-input');
+    const descField = document.getElementById('view-desc-field');
+    const descInput = document.getElementById('view-desc-input');
     const idInput = document.getElementById('view-id-input');
     const title = document.getElementById('view-modal-title');
     const submitBtn = document.getElementById('view-create-btn');
+    const submitLabel = submitBtn?.querySelector('.btn-label');
     const alert = document.getElementById('view-modal-alert');
+    const progress = document.getElementById('view-modal-progress');
+
+    // Cuando la creación anduvo pero la generación falló, la vista YA EXISTE: perderla porque la
+    // IA se cayó sería lo peor de los dos mundos. El botón cambia a "Abrir la vista" y navega.
+    let createdViewId = null;
+    let busy = false;
+
+    const setLabel = (txt) => { if (submitLabel) submitLabel.textContent = txt; };
+    const reset = () => {
+        createdViewId = null;
+        busy = false;
+        submitBtn.classList.remove('is-loading');
+        submitBtn.removeAttribute('aria-busy');
+        const loadingLabel = submitBtn.querySelector('.btn-loading-label');
+        if (loadingLabel) loadingLabel.textContent = 'Creando…';
+        progress.innerHTML = '';
+    };
 
     const openCreate = () => {
+        reset();
         idInput.value = '';
         nameInput.value = '';
+        descInput.value = '';
+        descField.hidden = false;
         title.textContent = 'Nueva vista';
-        submitBtn.textContent = 'Crear vista';
+        setLabel('Crear vista');
         showAlert(alert, null);
         modal.classList.remove('hidden');
         nameInput.focus();
@@ -1172,10 +1199,14 @@ function setupViewModal() {
         // El ítem del menú ya viene deshabilitado desde el servidor; esto cubre el otro camino
         // (doble click en la tab activa), que no tiene estado visual de "no podés".
         if (!canEditActiveView()) { showViewAlert(VIEW_PERMISSION_MSG); return; }
+        reset();
         idInput.value = ACTIVE_VIEW_ID;
         nameInput.value = (typeof ACTIVE_VIEW_NAME !== 'undefined') ? ACTIVE_VIEW_NAME : '';
+        // Renombrar no regenera nada: el pedido en lenguaje natural no tiene sentido acá y
+        // mostrarlo vacío haría pensar que renombrar borra la descripción original.
+        descField.hidden = true;
         title.textContent = 'Renombrar vista';
-        submitBtn.textContent = 'Guardar nombre';
+        setLabel('Guardar nombre');
         showAlert(alert, null);
         modal.classList.remove('hidden');
         nameInput.focus();
@@ -1189,27 +1220,72 @@ function setupViewModal() {
     document.querySelector('.view-tab.active')?.addEventListener('dblclick', openRename);
     document.getElementById('view-modal-close')?.addEventListener('click', () => modal.classList.add('hidden'));
 
+    // El rótulo dice lo que va a pasar de verdad: con pedido escrito, crear también genera.
+    descInput?.addEventListener('input', () => {
+        if (idInput.value || createdViewId) return;
+        setLabel(descInput.value.trim() ? 'Crear y generar' : 'Crear vista');
+    });
+
     submitBtn?.addEventListener('click', async () => {
+        // Bandera y no `disabled`: deshabilitar el botón enfocado le tira el foco al <body>.
+        if (busy) return;
+        if (createdViewId) { window.location.href = `analysis.php?view_id=${createdViewId}`; return; }
+
         const nombre = nameInput.value.trim();
         if (!nombre) { showAlert(alert, 'Poné un nombre.', 'error'); return; }
         const id = idInput.value;
+        const descripcion = descField.hidden ? '' : descInput.value.trim();
         const fd = new FormData();
+
+        busy = true;
+        submitBtn.classList.add('is-loading');
+        submitBtn.setAttribute('aria-busy', 'true');
+        showAlert(alert, null);
+
         try {
-            let target;
             if (id) {
                 fd.append('action', 'rename');
                 fd.append('id', id);
                 fd.append('nombre', nombre);
                 await Api.postForm('../api/views.php', fd);
-                target = id;
-            } else {
-                fd.append('nombre', nombre);
-                const result = await Api.postForm('../api/views.php', fd);
-                target = result.id;
+                window.location.href = `analysis.php?view_id=${id}`;
+                return;
             }
-            window.location.href = `analysis.php?view_id=${target}`;
+
+            fd.append('nombre', nombre);
+            fd.append('description', descripcion);
+            const result = await Api.postForm('../api/views.php', fd);
+            createdViewId = result.id;
+
+            // Encadenar o no la generación lo decide el servidor (`should_generate`): la regla
+            // "vista nueva + descripción no vacía" está escrita una sola vez, en api/views.php.
+            if (!result.should_generate) {
+                window.location.href = `analysis.php?view_id=${createdViewId}`;
+                return;
+            }
+
+            // La descripción ES el pedido: se genera antes de navegar. Si redirigiéramos primero,
+            // el usuario se quedaría un minuto mirando una vista vacía sin saber si pasa algo.
+            const loadingLabel = submitBtn.querySelector('.btn-loading-label');
+            if (loadingLabel) loadingLabel.textContent = 'Generando…';   // ya no está "creando"
+            const stop = renderGenerationProgress(progress, 'Armando tu vista…');
+            try {
+                const gen = new FormData();
+                gen.append('view_id', createdViewId);
+                await Api.postForm('../api/generate.php', gen);
+                window.location.href = `analysis.php?view_id=${createdViewId}`;
+            } finally {
+                stop();
+            }
         } catch (err) {
-            showAlert(alert, err.message, 'error');
+            showAlert(alert, createdViewId
+                ? 'La vista se creó, pero la IA no pudo armarla: ' + err.message + ' Abrila y probá de nuevo desde "Generar con IA".'
+                : err.message, 'error');
+            busy = false;
+            submitBtn.classList.remove('is-loading');
+            submitBtn.removeAttribute('aria-busy');
+            progress.innerHTML = '';
+            if (createdViewId) setLabel('Abrir la vista');
         }
     });
 
@@ -1231,11 +1307,100 @@ function setupViewModal() {
     });
 }
 
+// ---------- Barra de vistas: dos filas (club / propias) sin scroll horizontal ----------
+//
+// Markup: #view-rail > .vrail-row[data-row] > (.vrail-label, .vrail-tabs, .vrail-overflow,
+// [Jugadores ▾], [+ Nueva vista]). Ver steps/analysis.php.
+//
+// Ninguna fila scrollea. Lo que no entra en el ancho real se esconde (.is-collapsed) y aparece en
+// el menú "+N ▾" de esa misma fila. El servidor no puede decidir esto: depende del ancho del
+// viewport, del zoom y de la fuente que terminó cargando.
+
+/**
+ * Acomoda UNA fila: decide qué tabs entran y llena su menú de desborde.
+ *
+ * La medición es `scrollWidth > clientWidth` sobre `.vrail-tabs`, que es `flex: 0 1 auto` con
+ * `min-width: 0` y `overflow: hidden`: cuando el contenido no entra, el flex lo encoge hasta el
+ * ancho disponible y scrollWidth queda por encima de clientWidth. Todos sus hermanos de fila son
+ * `flex: 0 0 auto`, así que el único que cede es este.
+ */
+function layoutViewRow(row) {
+    const tabsEl = row.querySelector('.vrail-tabs');
+    const wrap = row.querySelector('.vrail-overflow');
+    if (!tabsEl || !wrap) return;
+    const btn = wrap.querySelector('.vrail-more');
+    const menu = wrap.querySelector('.widget-menu');
+    const tabs = [...tabsEl.querySelectorAll('.view-tab')];
+
+    // Estado limpio: sin esto, un resize hacia más ancho nunca devolvería las tabs escondidas.
+    tabs.forEach((t) => t.classList.remove('is-collapsed'));
+    wrap.hidden = true;
+    menu.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+
+    const fits = () => tabsEl.scrollWidth <= tabsEl.clientWidth + 1;
+    if (!tabs.length || fits()) { menu.innerHTML = ''; return; }
+
+    // El propio "+N ▾" ocupa ancho: se muestra ANTES de seguir midiendo, o la cuenta daría corta
+    // y la última tab quedaría medio recortada — exactamente el defecto que vinimos a arreglar.
+    btn.textContent = '+' + tabs.length + ' ▾';
+    wrap.hidden = false;
+
+    // Se esconde de derecha a izquierda, saltando la tab abierta: la vista que el usuario está
+    // mirando nunca desaparece de la barra.
+    for (let i = tabs.length - 1; i >= 0 && !fits(); i--) {
+        if (tabs[i].classList.contains('active')) continue;
+        tabs[i].classList.add('is-collapsed');
+    }
+
+    const hidden = tabs.filter((t) => t.classList.contains('is-collapsed'));
+    if (!hidden.length) { wrap.hidden = true; menu.innerHTML = ''; return; }
+
+    btn.textContent = '+' + hidden.length + ' ▾';
+    menu.innerHTML = hidden.map((t) => {
+        // textContent y no el atributo truncado: la tab recorta con ellipsis por CSS, el texto
+        // del DOM sigue siendo el nombre completo.
+        const nombre = t.textContent.trim();
+        return `<a class="widget-menu-item" role="menuitem" href="?view_id=${encodeURIComponent(t.dataset.viewId || '')}">`
+            + `<span class="wm-icon" aria-hidden="true">▤</span> ${escapeHtml(nombre)}</a>`;
+    }).join('');
+}
+
+function layoutViewRail() {
+    document.querySelectorAll('#view-rail .vrail-row').forEach(layoutViewRow);
+}
+
+function setupViewRail() {
+    const rail = document.getElementById('view-rail');
+    if (!rail) return;
+
+    rail.querySelectorAll(".vrail-row").forEach((row) => {
+        const slug = row.dataset.row;
+        setupOverflowMenu('view-more-btn-' + slug, 'view-more-menu-' + slug);
+        setupOverflowMenu('players-menu-btn-' + slug, 'players-menu-' + slug);
+        setupViewTabsDrag(row.querySelector('.vrail-tabs'));
+    });
+
+    layoutViewRail();
+
+    // Las tabs se miden en px: mientras la webfont no cargó, el ancho es el de la fuente de
+    // respaldo y la cuenta sale distinta. Se recalcula cuando termina el swap.
+    if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(layoutViewRail).catch(() => {});
+    }
+
+    let raf = 0;
+    window.addEventListener('resize', () => {
+        if (raf) cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(() => { raf = 0; layoutViewRail(); });
+    });
+}
+
 // Reordenar las tabs de vista por arrastre. Las tabs son <a> (siguen navegando al hacer click);
-// el drag las reacomoda en el DOM y persiste el nuevo orden. Solo aplica a las tabs inline
-// (las vistas de jugador viven en su propio desplegable).
-function setupViewTabsDrag() {
-    const nav = document.getElementById('view-tabs');
+// el drag las reacomoda en el DOM y persiste el nuevo orden. Solo aplica a las tabs inline (las
+// vistas de jugador viven en su propio desplegable) y SOLO DENTRO DE SU FILA: una vista no cambia
+// de dueño porque la arrastres, así que `nav` acota el drop a las tabs del mismo origen.
+function setupViewTabsDrag(nav) {
     if (!nav) return;
     nav.querySelectorAll('.view-tab').forEach((tab) => {
         tab.draggable = true;
@@ -1246,10 +1411,14 @@ function setupViewTabsDrag() {
         });
         tab.addEventListener('dragend', () => {
             tab.classList.remove('dragging');
+            // El orden nuevo puede cambiar qué entra en la fila (los nombres no miden lo mismo).
+            layoutViewRail();
             persistViewOrder();
         });
         tab.addEventListener('dragover', (e) => {
             e.preventDefault();
+            // Si la tab arrastrada es de la OTRA fila, este querySelector no la encuentra y el
+            // drop no hace nada: es la barrera que impide mezclar filas.
             const dragging = nav.querySelector('.view-tab.dragging');
             if (!dragging || dragging === tab) return;
             const rect = tab.getBoundingClientRect();
@@ -1262,10 +1431,14 @@ function setupViewTabsDrag() {
 // El orden de las tabs es una PREFERENCIA DE USUARIO (tabla view_order), no un dato del club: cada
 // uno acomoda las suyas y las del club como quiera, sin pisarle el orden a nadie. Por eso el drag
 // NO se gatea por permiso — un miembro común puede reordenar tabs de vistas del club.
+//
+// Se mandan los ids de LAS DOS filas en orden de documento (club y después propias). El endpoint
+// numera 0..n la lista que recibe: mandar una sola fila dejaría a la otra con posiciones viejas
+// intercaladas. Las tabs escondidas en "+N ▾" siguen en el DOM y viajan en su lugar exacto.
 async function persistViewOrder() {
-    const nav = document.getElementById('view-tabs');
-    if (!nav) return;
-    const ids = [...nav.querySelectorAll('.view-tab')].map((t) => t.dataset.viewId).filter(Boolean);
+    const rail = document.getElementById('view-rail');
+    if (!rail) return;
+    const ids = [...rail.querySelectorAll('.vrail-tabs .view-tab')].map((t) => t.dataset.viewId).filter(Boolean);
     if (!ids.length) return;
     const fd = new FormData();
     fd.append('action', 'reorder');
@@ -1276,6 +1449,103 @@ async function persistViewOrder() {
         // err.message es el texto que mandó el servidor (Api tira Error(data.error)): se muestra
         // completo, precedido de qué se estaba intentando hacer.
         showViewAlert('No se pudo guardar el orden de las vistas: ' + err.message);
+    }
+}
+
+// ---------- Generar / Regenerar la vista entera con IA ----------
+
+// api/generate.php tarda ~60 segundos. Un spinner mudo durante un minuto se lee como colgado, así
+// que el texto avanza por etapas. No son barras de progreso reales (el endpoint es una sola
+// llamada, no hay porcentaje que informar): son señales de que sigue trabajando. Por eso nunca
+// dicen "faltan N segundos" — mentir sobre el tiempo es peor que no decir nada.
+const GENERATION_STEPS = [
+    'Leyendo tus datasets…',
+    'Eligiendo qué gráficos cuentan mejor la historia…',
+    'Armando los widgets…',
+    'Últimos detalles…',
+];
+
+/**
+ * Pinta el skeleton .ai-thinking en `container` y va rotando el texto. Devuelve la función que
+ * corta el temporizador (hay que llamarla sí o sí, también en el camino de error).
+ */
+function renderGenerationProgress(container, firstText) {
+    container.innerHTML = `
+        <div class="ai-thinking" role="status" aria-live="polite">
+            <span class="ai-thinking-spark" aria-hidden="true">✦</span>
+            <div class="ai-thinking-lines">
+                <div class="ai-thinking-text">${escapeHtml(firstText)}</div>
+                <div class="ai-thinking-bar"></div>
+                <div class="ai-thinking-bar short"></div>
+            </div>
+        </div>`;
+    const textEl = container.querySelector('.ai-thinking-text');
+    let i = -1;
+    const timer = setInterval(() => {
+        i = Math.min(i + 1, GENERATION_STEPS.length - 1);
+        textEl.textContent = GENERATION_STEPS[i];
+    }, 13000);
+    return () => clearInterval(timer);
+}
+
+let generatingView = false;
+
+/**
+ * Revela el botón con el rótulo que corresponde. Sin widgets es "Generar"; con widgets es
+ * "Regenerar" y pide confirmación, porque los reemplaza a todos.
+ */
+function refreshGenerateButton() {
+    const btn = document.getElementById('generate-view-btn');
+    if (!btn) return;   // vista que este usuario no puede editar: el servidor no lo renderizó
+    btn.querySelector('.btn-label').textContent = currentWidgets.length ? 'Regenerar con IA' : 'Generar con IA';
+    btn.hidden = false;
+}
+
+async function runViewGeneration() {
+    if (generatingView) return;
+    const btn = document.getElementById('generate-view-btn');
+    const addBtn = document.getElementById('add-widget-btn');
+    const grid = document.getElementById('widget-grid');
+    if (!btn || !grid) return;
+
+    // Regenerar es destructivo: se dice cuántos widgets se pierden, no un "¿estás seguro?" vacío.
+    const n = currentWidgets.length;
+    if (n > 0) {
+        const msg = n === 1
+            ? 'Esto reemplaza el widget actual por un tablero nuevo generado por IA. No se puede deshacer.'
+            : `Esto reemplaza los ${n} widgets actuales por un tablero nuevo generado por IA. No se puede deshacer.`;
+        if (!confirm(msg)) return;
+    }
+
+    generatingView = true;
+    btn.classList.add('is-loading');       // .btn.is-loading ya corta pointer-events
+    btn.setAttribute('aria-busy', 'true');
+    if (addBtn) addBtn.disabled = true;
+    showViewAlert(null);
+
+    const stop = renderGenerationProgress(grid, 'Armando tu tablero…');
+    try {
+        const fd = new FormData();
+        fd.append('view_id', ACTIVE_VIEW_ID);
+        const res = await Api.postForm('../api/generate.php', fd);
+        stop();
+        await loadWidgets();
+        const creados = Number(res.created ?? 0);
+        const borrados = Number(res.deleted ?? 0);
+        showViewAlert(borrados
+            ? `Listo: ${creados} widgets nuevos (se reemplazaron ${borrados}).`
+            : `Listo: ${creados} widgets nuevos.`, 'success');
+    } catch (err) {
+        stop();
+        // loadWidgets() repinta lo que haya quedado en la base: si el endpoint borró y falló al
+        // crear, el usuario tiene que ver el estado real, no el skeleton congelado.
+        await loadWidgets();
+        showViewAlert(err.message);
+    } finally {
+        generatingView = false;
+        btn.classList.remove('is-loading');
+        btn.removeAttribute('aria-busy');
+        if (addBtn) addBtn.disabled = false;
     }
 }
 
@@ -1315,6 +1585,9 @@ function setupBaseModal() {
 
     document.getElementById('gen-base-btn')?.addEventListener('click', openModal);
     document.getElementById('gen-base-btn-empty')?.addEventListener('click', openModal);
+    // CTA inline de la fila "Del club" vacía (el club no generó sus vistas base todavía pero el
+    // usuario ya tiene vistas propias, así que la card del estado vacío no se renderiza).
+    document.getElementById('gen-base-btn-row')?.addEventListener('click', openModal);
     document.getElementById('base-modal-close')?.addEventListener('click', closeModal);
     modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
 
@@ -1683,14 +1956,12 @@ setupKeyboard();
 // Crear/eliminar vistas: siempre disponible (los botones existen aunque no haya grilla de widgets).
 setupViewModal();
 
-// Desplegable de vistas de jugador ("Jugadores ▾"). No-op si no hay overviews de jugador.
-setupOverflowMenu('players-menu-btn', 'players-menu');
+// Barra de vistas en dos filas: desplegables por fila ("Jugadores ▾" y "+N ▾"), drag de tabs
+// dentro de cada fila y cálculo de desborde. No-op si la barra no se renderizó (club sin vistas).
+setupViewRail();
 
 // Modal de vistas base: disponible tanto en el estado vacío como con vistas ya creadas.
 setupBaseModal();
-
-// Reordenar las tabs de vista por arrastre.
-setupViewTabsDrag();
 
 if (document.getElementById('widget-grid')) {
     setupWidgetModal();
@@ -1699,5 +1970,6 @@ if (document.getElementById('widget-grid')) {
     setupMetricsModal();
     setupFiltersModal();
     setupOverflowMenu('view-actions-btn', 'view-actions-menu');
+    document.getElementById('generate-view-btn')?.addEventListener('click', runViewGeneration);
     loadWidgets();
 }
