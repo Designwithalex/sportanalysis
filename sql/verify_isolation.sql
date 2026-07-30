@@ -12,11 +12,17 @@
 --     hay un solo club y todo quedó backfilleado a GEBA).
 --   - Después de deployar el código con scoping, ANTES de correr la PARTE B.
 --     Este es el chequeo que decide si la B se puede correr.
---   - Periódicamente. Los tres chequeos marcados [SIN FK] son los únicos que la
---     base NO puede garantizar por sí sola después de la PARTE B (ver PARTE 1-bis
---     de migration_2026_07_multiclub_b.sql): ahí sí hace falta mirarlos.
+--   - Periódicamente. Los chequeos marcados [SIN FK] son los que la base NO puede
+--     garantizar por sí sola después de la PARTE B (ver PARTE 1-bis de
+--     migration_2026_07_multiclub_b.sql): ahí sí hace falta mirarlos.
+--   - El BLOQUE E entero es [SIN FK]: cubre `users`, `views.user_id`, `view_order`
+--     y `verificaciones`, donde las FKs son simples a propósito.
 --
 -- Requiere que la columna club_id exista, o sea: PARTE A ya corrida.
+-- El BLOQUE E requiere además migration_2026_07_roles_vistas.sql. Por eso va como
+-- statement SEPARADO (igual que el D): si esa migración todavía no se aplicó, el E
+-- falla con "Unknown column 'views.user_id'" / "Table 'view_order' doesn't exist"
+-- pero los BLOQUES 1-3 y el D ya corrieron y se leen igual.
 -- MariaDB 11.8 — sin funciones de ventana, sólo COUNT + JOIN.
 -- =============================================================================
 
@@ -123,3 +129,55 @@ JOIN JSON_TABLE(
      ) jt ON 1 = 1
 JOIN datasets d ON d.id = jt.dataset_id
 WHERE d.club_id <> w.club_id;
+
+
+-- ---------------------------------------------------------------------------
+-- BLOQUE 5 / E (aparte) — Permisos, vistas privadas y verificaciones.
+--
+-- Requiere migration_2026_07_roles_vistas.sql corrida. Va como statement separado
+-- para no arrastrar a los BLOQUES 1-3 si esa migración todavía no se aplicó.
+--
+-- Ninguno de estos cinco está garantizado por una FK: `views.user_id`,
+-- `view_order` y `verificaciones` usan FKs SIMPLES (a users/clubs/views), así que
+-- la base no puede impedir por sí sola que una fila cruce de club. Es la app la
+-- que tiene que scopear, y esto lo audita.
+--
+-- NO se chequea `verificaciones.revisada_por` contra el club: un superadmin
+-- resuelve pedidos de cualquier club, así que ahí un club distinto es LEGÍTIMO.
+-- ---------------------------------------------------------------------------
+
+SELECT 'E01  views.user_id -> users de otro club        [SIN FK]' AS chequeo, COUNT(*) AS filas_malas
+    FROM views v JOIN users u ON u.id = v.user_id
+    WHERE u.club_id <> v.club_id
+UNION ALL
+-- Fila de orden de tabs que apunta a una vista que ese usuario no puede ver:
+-- o es de otro club, o es una vista PRIVADA de otro usuario.
+SELECT 'E02  view_order -> vista no visible para el user [SIN FK]', COUNT(*)
+    FROM view_order vo
+    JOIN users u ON u.id = vo.user_id
+    JOIN views v ON v.id = vo.view_id
+    WHERE v.club_id <> u.club_id
+       OR (v.user_id IS NOT NULL AND v.user_id <> vo.user_id)
+UNION ALL
+SELECT 'E03  verificaciones.club_id <> users.club_id     [SIN FK]', COUNT(*)
+    FROM verificaciones f JOIN users u ON u.id = f.user_id
+    WHERE f.club_id <> u.club_id
+UNION ALL
+-- Las vistas base (cluster = categoría de datos, player = overview de un jugador)
+-- las genera BaseViewGenerator para el club entero: SIEMPRE user_id NULL.
+-- Una con dueño sería una vista base secuestrada por un usuario.
+SELECT 'E04  views cluster/player con user_id NOT NULL', COUNT(*)
+    FROM views
+    WHERE tipo IN ('cluster', 'player') AND user_id IS NOT NULL
+UNION ALL
+-- No hay UNIQUE (club_id, categoria) sobre las vistas cluster y el upsert de
+-- BaseViewGenerator resuelve con LIMIT 1: si alguna vez se duplicaron, el
+-- generador siempre pisa la misma y las otras quedan zombis. Cuenta las SOBRANTES.
+SELECT 'E05  vistas cluster duplicadas por (club, categoria)', COALESCE(SUM(sobrantes), 0)
+    FROM (
+        SELECT COUNT(*) - 1 AS sobrantes
+        FROM views
+        WHERE tipo = 'cluster'
+        GROUP BY club_id, categoria
+        HAVING COUNT(*) > 1
+    ) dup;

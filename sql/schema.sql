@@ -2,10 +2,13 @@
 -- Correr una sola vez contra la base de Hostinger (phpMyAdmin o cliente MySQL).
 -- No se sube a public_html; es solo referencia/setup.
 --
--- Estado: MULTI-CLUB (equivale a base nueva + migration_2026_07_multiclub_a + _b
--- ya aplicadas). Una base creada con este archivo NO necesita correr ninguna de
--- las dos migraciones multiclub; sí conviene correr seed_clubs_urba.sql para
--- poblar el dropdown de registro.
+-- Estado: MULTI-CLUB + ROLES Y VISTAS POR USUARIO (equivale a base nueva +
+-- migration_2026_07_multiclub_a + _b + migration_2026_07_roles_vistas ya
+-- aplicadas). Una base creada con este archivo NO necesita correr ninguna de esas
+-- migraciones; sí conviene correr seed_clubs_urba.sql para poblar el dropdown de
+-- registro, y promover a mano el primer superadmin:
+--     UPDATE users SET nivel = 'superadmin' WHERE email = '...';
+-- (no hay ni debe haber un camino self-service para llegar a superadmin).
 --
 -- Regla de oro del modelo: TODA tabla del dominio lleva `club_id` NOT NULL, y las
 -- relaciones entre ellas son FKs COMPUESTAS (fk_col, club_id) -> (id, club_id).
@@ -31,7 +34,11 @@ CREATE TABLE clubs (
 
 -- ---------------------------------------------------------------------------
 -- users — cuentas de acceso. Registro abierto: el usuario elige su club de un
--- dropdown con los clubes activos. No hay roles con permisos en el MVP.
+-- dropdown con los clubes activos, y queda en `pending` hasta que lo aprueben.
+--
+-- DOS COLUMNAS QUE SE PARECEN Y NO SON LO MISMO:
+--   `rol`   = etiqueta libre del perfil ("Preparador físico"). Decorativa.
+--   `nivel` = permisos reales. Es lo ÚNICO que la app debe mirar para autorizar.
 -- ---------------------------------------------------------------------------
 CREATE TABLE users (
     id             INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -40,13 +47,61 @@ CREATE TABLE users (
     password_hash  VARCHAR(255) NOT NULL COMMENT 'password_hash() de PHP, nunca texto plano',
     nombre         VARCHAR(150) NOT NULL,
     rol            VARCHAR(80) NULL COMMENT 'texto libre descriptivo (preparador físico, head coach, etc.), no controla permisos',
-    status         ENUM('active', 'pending') NOT NULL DEFAULT 'active'
-                   COMMENT 'pending = alta creada pero todavía sin habilitar',
+    nivel          ENUM('miembro', 'admin_club', 'superadmin') NOT NULL DEFAULT 'miembro'
+                   COMMENT 'permisos reales; `rol` es la etiqueta libre del perfil y no gatea nada',
+    -- El orden del ENUM replica el de producción a propósito ('active' primero): la migración
+    -- appendea 'rechazado' al final en vez de reordenar, para no mover los índices con que
+    -- MariaDB guarda los valores. Si acá lo reordenáramos, una base nueva y una migrada
+    -- quedarían con índices distintos para el mismo valor.
+    status         ENUM('active', 'pending', 'rechazado') NOT NULL DEFAULT 'pending'
+                   COMMENT 'pending = alta creada, todavía sin aprobar; rechazado = alta denegada, no entra',
     created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_login_at  TIMESTAMP NULL,
     CONSTRAINT fk_users_club FOREIGN KEY (club_id) REFERENCES clubs(id),
     UNIQUE KEY uq_users_email (email),
-    INDEX idx_users_club (club_id)
+    INDEX idx_users_club (club_id),
+    INDEX idx_users_club_status (club_id, status) COMMENT 'cola de altas pendientes de un club',
+    INDEX idx_users_nivel (nivel)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
+-- verificaciones — pedidos de verificación de identidad: el usuario dice "soy
+-- socio de este club" y aporta pruebas blandas. Un admin_club (o el superadmin)
+-- aprueba o rechaza con motivo. Se permiten varios pedidos por usuario
+-- (rechazado -> vuelve a intentar), por eso no hay UNIQUE sobre user_id.
+--
+-- `foto_url` ES UN LINK, NUNCA UN ARCHIVO SUBIDO: aceptar uploads abriría un
+-- vector de subida arbitraria dentro de public_html.
+--
+-- EXCEPCIÓN AL PATRÓN: las FKs son SIMPLES, no compuestas con club_id.
+-- `revisada_por` es ON DELETE SET NULL (InnoDB no lo admite compuesto con una
+-- columna NOT NULL, mismo caso que dataset_rows.player_id), y `user_id` no tiene
+-- un UNIQUE (id, club_id) en users al que engancharse. Que `verificaciones.club_id`
+-- coincida con `users.club_id` lo garantiza la app; verify_isolation.sql lo audita
+-- (chequeo E03).
+-- ---------------------------------------------------------------------------
+CREATE TABLE verificaciones (
+    id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id         INT UNSIGNED NOT NULL COMMENT 'quién pide la verificación',
+    club_id         INT UNSIGNED NOT NULL COMMENT 'club contra el que se verifica; debe coincidir con users.club_id',
+    instagram       VARCHAR(120) NULL COMMENT 'usuario de instagram, con o sin @',
+    numero_socio    VARCHAR(60) NULL COMMENT 'texto libre: hay clubes con nº alfanuméricos',
+    foto_url        VARCHAR(500) NULL COMMENT 'LINK a una foto (carnet, perfil). Nunca un archivo subido al server',
+    nota            TEXT NULL COMMENT 'comentario libre del solicitante',
+    estado          ENUM('pendiente', 'aprobada', 'rechazada') NOT NULL DEFAULT 'pendiente',
+    motivo_rechazo  TEXT NULL COMMENT 'sólo si estado = rechazada; se le muestra al solicitante',
+    revisada_por    INT UNSIGNED NULL COMMENT 'admin_club o superadmin que resolvió el pedido',
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revisada_at     TIMESTAMP NULL,
+    CONSTRAINT fk_verificaciones_user    FOREIGN KEY (user_id)      REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_verificaciones_club    FOREIGN KEY (club_id)      REFERENCES clubs(id),
+    CONSTRAINT fk_verificaciones_revisor FOREIGN KEY (revisada_por) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_verificaciones_estado (estado) COMMENT 'cola global de pendientes (superadmin)',
+    INDEX idx_verificaciones_club_estado (club_id, estado) COMMENT 'cola de pendientes de un club (admin_club)',
+    -- UNIQUE: una solicitud por usuario. Sin esto, dos submits concurrentes desde
+    -- verificacion.php (que hace SELECT-then-UPDATE-or-INSERT) crean dos filas y la cola
+    -- del admin muestra dos tarjetas de la misma persona.
+    UNIQUE KEY uq_verificaciones_user (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
@@ -146,6 +201,19 @@ CREATE TABLE name_reconciliations (
 -- `player_id` es NULLable (sólo lo usan las vistas tipo 'player'). Con semántica
 -- MATCH SIMPLE de InnoDB, la FK compuesta no se evalúa cuando player_id es NULL,
 -- así que las vistas manual/cluster se insertan sin restricción extra.
+--
+-- VISIBILIDAD (`user_id`):
+--   NULL     -> vista BASE del club: la ven todos los usuarios del club.
+--   NOT NULL -> vista PRIVADA: sólo la ve ese usuario.
+-- Las vistas 'cluster' y 'player' las genera BaseViewGenerator para el club
+-- entero, así que son SIEMPRE base (user_id NULL); sólo las 'manual' pueden ser
+-- privadas. No se expresa con un CHECK para no clavar una decisión de producto;
+-- se audita en verify_isolation.sql (chequeo E04).
+--
+-- `fk_views_user` es ON DELETE CASCADE, NO SET NULL, y la diferencia importa:
+-- acá user_id NULL no significa "huérfana" sino "visible para todo el club", así
+-- que SET NULL convertiría las vistas privadas de una cuenta borrada en vistas
+-- públicas del club. Perder los datos de quien se fue es preferible a exponerlos.
 -- ---------------------------------------------------------------------------
 CREATE TABLE views (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -156,17 +224,47 @@ CREATE TABLE views (
     categoria     ENUM('partidos', 'entrenamientos', 'fuerza', 'nutricion', 'otros') NULL
                   COMMENT 'solo en vistas cluster: de que categoria de datasets es la vista',
     player_id     INT UNSIGNED NULL COMMENT 'solo en vistas player: jugador cuyo overview muestra la vista',
-    position      INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'orden manual de las tabs (reordenables por arrastre)',
+    user_id       INT UNSIGNED NULL
+                  COMMENT 'NULL = vista base del club (la ven todos); NOT NULL = privada de ese usuario',
+    position      INT UNSIGNED NOT NULL DEFAULT 0
+                  COMMENT 'orden por defecto de las tabs, a nivel club. El orden real por usuario vive en view_order',
     description   TEXT NOT NULL COMMENT 'prompt original del usuario / intent de generacion',
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_views_club FOREIGN KEY (club_id) REFERENCES clubs(id),
     CONSTRAINT fk_views_player_club FOREIGN KEY (player_id, club_id) REFERENCES players(id, club_id) ON DELETE CASCADE,
+    CONSTRAINT fk_views_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE KEY uq_views_id_club (id, club_id) COMMENT 'target de las FKs compuestas de las tablas hijas',
     INDEX idx_views_tipo (tipo),
     INDEX idx_views_position (position),
     INDEX idx_views_player_club (player_id, club_id),
+    INDEX idx_views_user (user_id),
     INDEX idx_views_club (club_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
+-- view_order — orden de las tabs POR USUARIO.
+--
+-- `views.position` es una sola columna compartida por todo el club: alcanzaba
+-- cuando todas las vistas eran del club, pero con vistas privadas mezcladas en
+-- las mismas tabs cada usuario ve un orden distinto y no entra en una columna.
+-- `views.position` se conserva como orden por defecto para un usuario que nunca
+-- reordenó nada (o sea: sin filas acá).
+--
+-- Sin club_id a propósito: es una tabla de PREFERENCIA de usuario, no de dominio.
+-- El club sale del user y de la view, que ya lo llevan. La contra es que la base
+-- no impide por sí sola una fila que cruce (usuario de un club, vista de otro):
+-- se audita en verify_isolation.sql (chequeo E02).
+-- ---------------------------------------------------------------------------
+CREATE TABLE view_order (
+    user_id     INT UNSIGNED NOT NULL,
+    view_id     INT UNSIGNED NOT NULL,
+    position    INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'orden de la tab para ESE usuario; 0 = primera',
+    PRIMARY KEY (user_id, view_id),
+    CONSTRAINT fk_view_order_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_view_order_view FOREIGN KEY (view_id) REFERENCES views(id) ON DELETE CASCADE,
+    INDEX idx_view_order_view (view_id) COMMENT 'lado hijo de fk_view_order_view',
+    INDEX idx_view_order_user_pos (user_id, position) COMMENT 'ORDER BY position del render de tabs'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
