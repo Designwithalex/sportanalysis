@@ -8,6 +8,11 @@
  *
  * El rol es texto libre — una etiqueta descriptiva, no un permiso. El <datalist> sugiere los
  * habituales pero se acepta cualquier cosa.
+ *
+ * El alta NO habilita la cuenta: crea un usuario 'pending' y lo manda a verificacion.php a dejar
+ * evidencia de que pertenece al club. Lo aprueba el administrador de ese club (o el superadmin,
+ * si el club todavía no tiene uno). Sin ese paso, elegir un club del desplegable alcanzaría para
+ * ver los datos de un club ajeno.
  */
 require __DIR__ . '/app/bootstrap_page.php';
 
@@ -15,7 +20,8 @@ $pageTitle   = 'Crear cuenta — SportAnalysis';
 $assetPrefix = '';
 
 if (Auth::check()) {
-    header('Location: panel.php');
+    // Una cuenta todavía sin aprobar no va al panel: va a completar su verificación.
+    header('Location: ' . (Auth::status() === 'active' ? 'panel.php' : 'verificacion.php'));
     exit;
 }
 
@@ -118,9 +124,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$errors) {
             try {
+                // La cuenta nace 'pending': el alta es abierta, la habilitación no. Sin esto,
+                // cualquiera elige un club del desplegable y entra a ver sus datos.
+                // `nivel` no se setea acá: el default del esquema es 'miembro' y este alta nunca
+                // puede crear un administrador.
                 $stmt = $pdo->prepare(
                     'INSERT INTO users (club_id, email, password_hash, nombre, rol, status)
-                     VALUES (:club_id, :email, :hash, :nombre, :rol, "active")'
+                     VALUES (:club_id, :email, :hash, :nombre, :rol, \'pending\')'
                 );
                 $stmt->execute([
                     'club_id' => $clubId,
@@ -130,8 +140,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'rol'     => $rolIn !== '' ? $rolIn : null,
                 ]);
 
+                // Se abre la sesión igual: verificacion.php es la única pantalla privada que
+                // acepta una cuenta pendiente, y hace falta estar identificado para dejar la
+                // evidencia. El guard sigue bloqueando todo lo demás hasta la aprobación.
                 Auth::login(['id' => (int) $pdo->lastInsertId()]);
-                header('Location: panel.php');
+                header('Location: verificacion.php');
                 exit;
             } catch (PDOException $e) {
                 // 1062 = duplicate entry. Es el único caso esperable acá: carrera contra otro alta
@@ -161,7 +174,7 @@ require __DIR__ . '/app/views/publicnav.php';
     <section class="auth-card">
         <p class="auth-eyebrow">Crear cuenta</p>
         <h1 class="auth-title">Sumate a tu club</h1>
-        <p class="auth-sub">Elegí tu club de la lista y contanos qué hacés ahí. El rol es una etiqueta descriptiva, no cambia permisos.</p>
+        <p class="auth-sub">Elegí tu club de la lista y contanos qué hacés ahí. El rol es una etiqueta descriptiva, no cambia permisos. La cuenta la habilita alguien del club: en el paso siguiente te pedimos con qué verificarte.</p>
 
         <div class="form-status" role="status" aria-live="polite"><?php if ($formError !== ''): ?><div class="alert alert-error"><?= htmlspecialchars($formError) ?></div><?php endif; ?></div>
 
@@ -244,12 +257,12 @@ require __DIR__ . '/app/views/publicnav.php';
 
             <button class="btn auth-submit btn-swap-label" type="submit">
                 <span class="btn-spinner" aria-hidden="true"></span>
-                <span class="btn-label">Crear cuenta</span>
+                <span class="btn-label">Continuar</span>
                 <span class="btn-loading-label">Creando…</span>
             </button>
         </form>
 
-        <p class="auth-legal">Al crear la cuenta vas a ver los datos cargados para tu club.</p>
+        <p class="auth-legal">Tu cuenta queda pendiente de aprobación: no vas a ver datos de ningún club hasta que alguien de tu club confirme que sos parte. Es un paso más y evita que un tercero elija tu club de la lista y entre a tus datos.</p>
         <p class="auth-alt">¿Ya tenés cuenta? <a href="login.php">Ingresá</a></p>
     </section>
 </main>
