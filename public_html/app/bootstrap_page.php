@@ -77,23 +77,51 @@ function pageCurrentPath(): ?string
 }
 
 /**
- * Guard de autenticación para pantallas HTML.
+ * Nombre de archivo de la pantalla actual, relativo a la raíz pública y sin query string.
+ * Ej: 'verificacion.php', 'steps/analysis.php'. '' si no se pudo determinar.
+ */
+function pageCurrentFile(): string
+{
+    $path = pageCurrentPath();
+    if ($path === null) {
+        return '';
+    }
+
+    $q = strpos($path, '?');
+    return $q === false ? $path : substr($path, 0, $q);
+}
+
+/**
+ * Guard de autenticación + status para pantallas HTML.
  *
- * Sin sesión válida: redirect a login.php con `?next=` para volver a donde el usuario quería ir.
- * Redirect y no 401 porque acá el que consume es el navegador directamente.
+ * 1. Sin sesión válida: redirect a login.php con `?next=` para volver a donde el usuario quería
+ *    ir. Redirect y no 401 porque acá el que consume es el navegador directamente.
+ *
+ * 2. Con sesión pero cuenta no aprobada ('pending' / 'rechazado'): a verificacion.php, que es la
+ *    única pantalla que un usuario no aprobado puede ver. Ahí lee en qué estado quedó su
+ *    solicitud — por eso el login NO lo bloquea (ver Auth::attempt()).
+ *
+ *    La excepción es obligatoria: si la pantalla actual YA es verificacion.php, el redirect
+ *    apuntaría a sí mismo y el navegador entraría en un loop infinito. Se compara contra
+ *    pageCurrentFile() (ruta real del script), no contra la URL pedida.
+ *
+ *    logout.php no llama a requireAuth(), así que un 'pending' siempre puede cerrar sesión.
  */
 function requireAuth(): void
 {
-    if (Auth::check()) {
-        return;
+    if (!Auth::check()) {
+        $url  = pageRootPrefix() . 'login.php';
+        $next = Auth::safeNext(pageCurrentPath());
+        if ($next !== null) {
+            $url .= '?next=' . urlencode($next);
+        }
+
+        header('Location: ' . $url);
+        exit;
     }
 
-    $url  = pageRootPrefix() . 'login.php';
-    $next = Auth::safeNext(pageCurrentPath());
-    if ($next !== null) {
-        $url .= '?next=' . urlencode($next);
+    if (Auth::status() !== 'active' && pageCurrentFile() !== 'verificacion.php') {
+        header('Location: ' . pageRootPrefix() . 'verificacion.php');
+        exit;
     }
-
-    header('Location: ' . $url);
-    exit;
 }

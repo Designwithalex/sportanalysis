@@ -6,10 +6,16 @@
  * (`handleSave(PDO $pdo)`) que no ven el scope global, así que no hay dónde inyectar una
  * instancia. `Auth::clubId()` se puede llamar desde cualquier punto del request.
  *
- * En $_SESSION vive SOLO el id del usuario. El resto (club, rol, nombre, status) se relee de
+ * En $_SESSION vive SOLO el id del usuario. El resto (club, nivel, nombre, status) se relee de
  * la base una vez por request y se cachea en memoria. Así, si a alguien le cambian el club o
  * le pasan el status a 'pending', la sesión abierta no queda con datos rancios: el cambio
  * pega en la request siguiente sin tener que invalidar sesiones a mano.
+ *
+ * DOS COLUMNAS QUE NO HAY QUE CONFUNDIR:
+ *   - `users.nivel`  ('miembro' | 'admin_club' | 'superadmin') — permisos reales. Es lo único
+ *                    que gatea algo. Se lee con nivel() / esAdminClub() / requireNivel().
+ *   - `users.rol`    — etiqueta libre de texto del perfil ("Preparador físico", "DT"). NO gatea
+ *                    nada. Nunca uses `rol` para decidir un permiso.
  */
 
 require_once __DIR__ . '/Database.php';
@@ -48,11 +54,19 @@ final class Auth
         }
     }
 
+    /** Los tres niveles de permiso válidos. Cualquier otro valor se degrada a 'miembro'. */
+    private const NIVELES = ['miembro', 'admin_club', 'superadmin'];
+
     /**
      * Verifica credenciales y, si son válidas, abre la sesión.
      *
-     * Devuelve false por cualquier motivo (email inexistente, contraseña incorrecta, cuenta
-     * no activa) sin distinguirlos: quien llama solo puede mostrar el mensaje genérico.
+     * Devuelve false por email inexistente o contraseña incorrecta, sin distinguirlos: quien
+     * llama solo puede mostrar el mensaje genérico.
+     *
+     * NO corta por `status`. Un usuario 'pending' tiene que poder entrar: si le bloqueáramos el
+     * login no tendría forma de ver en qué estado quedó su solicitud ni de corregirla; y un
+     * 'rechazado' necesita entrar para leer que lo rechazaron. Qué puede *hacer* cada uno lo
+     * deciden los guards de bootstrap_page.php / bootstrap_api.php, no el login.
      */
     public static function attempt(string $email, string $password): bool
     {
@@ -74,11 +88,6 @@ final class Auth
         }
 
         if (!password_verify($password, (string) $row['password_hash'])) {
-            return false;
-        }
-
-        // Cuenta existente pero no habilitada: mismo resultado que credenciales incorrectas.
-        if ($row['status'] !== 'active') {
             return false;
         }
 
@@ -167,7 +176,13 @@ final class Auth
         }
     }
 
-    /** ¿Hay una sesión válida (usuario existente y activo)? */
+    /**
+     * ¿Hay una sesión válida, es decir, un usuario que existe en la base?
+     *
+     * OJO: true NO significa "puede usar la app". Un 'pending' y un 'rechazado' tienen sesión
+     * válida (la necesitan para ver su pantalla de estado). El permiso de uso lo decide
+     * status() — lo chequean los requireAuth() de bootstrap_page.php y bootstrap_api.php.
+     */
     public static function check(): bool
     {
         return self::user() !== null;
@@ -176,7 +191,7 @@ final class Auth
     /**
      * Usuario de la sesión actual, con los datos de su club adjuntos, o null.
      *
-     * Claves: id, club_id, email, nombre, rol, status, created_at, last_login_at,
+     * Claves: id, club_id, email, nombre, rol, nivel, status, created_at, last_login_at,
      *         club_nombre, club_slug, club_activo.
      *
      * Una sola consulta por request: el resultado queda cacheado en memoria.
@@ -196,7 +211,7 @@ final class Auth
 
         try {
             $stmt = Database::get()->prepare(
-                'SELECT u.id, u.club_id, u.email, u.nombre, u.rol, u.status,
+                'SELECT u.id, u.club_id, u.email, u.nombre, u.rol, u.nivel, u.status,
                         u.created_at, u.last_login_at,
                         c.nombre AS club_nombre, c.slug AS club_slug, c.activo AS club_activo
                  FROM users u
@@ -212,9 +227,8 @@ final class Auth
             return null;
         }
 
-        // El status se chequea en CADA request, no solo al loguearse: dar de baja una cuenta
-        // tiene que cortar las sesiones abiertas sin tener que salir a borrarlas.
-        if (!$row || $row['status'] !== 'active') {
+        // El usuario ya no existe (o le borraron el club): la sesión no vale nada.
+        if (!$row) {
             unset($_SESSION[self::SESSION_KEY]);
             return null;
         }
@@ -222,6 +236,15 @@ final class Auth
         $row['id']          = (int) $row['id'];
         $row['club_id']     = (int) $row['club_id'];
         $row['club_activo'] = (int) $row['club_activo'];
+        $row['status']      = (string) $row['status'];
+
+        // Nivel y status se releen en CADA request, no solo al loguearse: cambiarle el nivel a
+        // alguien, aprobarlo o rechazarlo tiene que pegar en la request siguiente sin tener que
+        // salir a invalidar sesiones a mano.
+        // Un nivel desconocido (columna nueva sin migrar, valor a mano en la base, typo) se
+        // degrada a 'miembro': ante la duda, el permiso más bajo, nunca el más alto.
+        $nivel = (string) ($row['nivel'] ?? '');
+        $row['nivel'] = in_array($nivel, self::NIVELES, true) ? $nivel : 'miembro';
 
         self::$cache = $row;
         return $row;
@@ -272,6 +295,133 @@ final class Auth
     {
         $u = self::user();
         return $u ? (int) $u['id'] : 0;
+    }
+
+    // ── Permisos (users.nivel) ───────────────────────────────────────────────────────────────
+    // Recordá: `users.rol` es una etiqueta de texto del perfil y NO decide permisos. Es `nivel`.
+
+    /**
+     * Nivel de permiso del usuario logueado.
+     *
+     * @return string 'miembro' | 'admin_club' | 'superadmin', o '' si no hay sesión.
+     *                El '' es deliberado: nunca matchea una lista de requireNivel(), así que un
+     *                request sin sesión se cae por el lado seguro sin necesitar un chequeo extra.
+     */
+    public static function nivel(): string
+    {
+        $u = self::user();
+        return $u ? (string) $u['nivel'] : '';
+    }
+
+    /**
+     * ¿Puede administrar su club? Incluye al superadmin: es admin de todos los clubes.
+     * Este es el chequeo que quieren casi todas las pantallas de administración.
+     */
+    public static function esAdminClub(): bool
+    {
+        $n = self::nivel();
+        return $n === 'admin_club' || $n === 'superadmin';
+    }
+
+    /** ¿Es superadmin (dueño de la plataforma, cruza clubes)? */
+    public static function esSuperadmin(): bool
+    {
+        return self::nivel() === 'superadmin';
+    }
+
+    /**
+     * Estado de la cuenta.
+     *
+     * @return string 'pending' | 'active' | 'rechazado', o '' si no hay sesión.
+     */
+    public static function status(): string
+    {
+        $u = self::user();
+        return $u ? (string) $u['status'] : '';
+    }
+
+    /**
+     * Corta el request si el nivel del usuario no está en la lista.
+     *
+     * La comparación es EXACTA, sin jerarquía implícita: `requireNivel('admin_club')` deja
+     * afuera al superadmin. Si querés que también pase (que es lo habitual), listalo:
+     *
+     *     Auth::requireNivel('admin_club', 'superadmin');   // equivale a Auth::esAdminClub()
+     *     Auth::requireNivel('superadmin');                 // solo plataforma
+     *
+     * Se hace así a propósito: que el permiso quede escrito en el call site y no dependa de una
+     * regla de escalada invisible metida acá adentro.
+     *
+     * Cómo corta, según el contexto (ver isJsonContext()):
+     *   - endpoint JSON → 403 con {"ok":false,...}, que es lo que el fetch() sabe leer.
+     *   - pantalla HTML → 404, NO 403. Para alguien sin permiso, el panel de administración no
+     *     tiene que existir: un 403 confirma que la pantalla está ahí y a quién le pertenece.
+     */
+    public static function requireNivel(string ...$niveles): void
+    {
+        foreach ($niveles as $n) {
+            if (!in_array($n, self::NIVELES, true)) {
+                // Bug de programación (typo, nivel inventado), no error de usuario: revienta
+                // fuerte en vez de degradar a un guard que no deja pasar nunca a nadie.
+                throw new InvalidArgumentException("Auth::requireNivel(): nivel desconocido \"$n\".");
+            }
+        }
+
+        if (in_array(self::nivel(), $niveles, true)) {
+            return;
+        }
+
+        if (self::isJsonContext()) {
+            respondError(403, 'No tenés permisos para hacer esto.');
+        }
+
+        self::notFoundHtml();
+    }
+
+    /**
+     * ¿Estamos respondiendo un endpoint JSON o una pantalla HTML?
+     *
+     * Dos señales, y hacen falta las dos:
+     *   1. Response.php cargado (existe respondError()) — sin eso no hay con qué responder JSON.
+     *   2. El Content-Type ya emitido es JSON — bootstrap_api.php lo manda arriba de todo, antes
+     *      de que corra una sola línea del endpoint.
+     *
+     * No se mira la URL: que un archivo esté en /api/ no dice nada, y una pantalla que por
+     * cualquier motivo cargue Response.php seguiría siendo HTML. Si las señales no coinciden,
+     * gana el camino HTML, que es el que niega más (404 en vez de 403).
+     */
+    private static function isJsonContext(): bool
+    {
+        if (!function_exists('respondError')) {
+            return false;
+        }
+
+        foreach (headers_list() as $header) {
+            if (stripos($header, 'content-type:') === 0 && stripos($header, 'json') !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * 404 mínimo y final para pantallas HTML. Sin layout, sin nav, sin nombre de la sección:
+     * todo lo que se renderice acá es información sobre algo que el usuario no debería saber
+     * que existe.
+     */
+    private static function notFoundHtml(): void
+    {
+        if (!headers_sent()) {
+            http_response_code(404);
+            header('Content-Type: text/html; charset=utf-8');
+        }
+
+        echo '<!doctype html><html lang="es"><head><meta charset="utf-8">'
+           . '<meta name="viewport" content="width=device-width, initial-scale=1">'
+           . '<title>404</title></head><body><h1>404</h1>'
+           . '<p>No encontramos esa página.</p></body></html>';
+        exit;
     }
 
     /** Normaliza el email tal como se guarda: sin espacios y en minúsculas. */
