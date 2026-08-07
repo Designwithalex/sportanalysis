@@ -224,6 +224,10 @@ CÓMO CRUZAR DATOS (importante):
 - Cada partido o sesión se sube como su propio dataset. Para cruzar varios (ej: "promedio por partido de los últimos 5 partidos") poné en config varios ids en "dataset_ids": [.., .., ..].
 - Cuando un widget abarca varios datasets, tenés disponible la columna sintética "__dataset" (categórica), que vale el nombre del dataset de origen de cada fila = el partido/sesión. Para "AVG de metros por partido": dataset_ids con los partidos, eje/categoría/agrupación = "__dataset", agregación = "avg".
 - Otras columnas sintéticas siempre disponibles: "__familia" (back/forward), "__sub_familia", "__player_nombre".
+- "__fecha" (tipo fecha) = fecha REAL del partido/sesión, no la de carga. Es el eje temporal correcto para "evolución en el tiempo": ordena cronológico de verdad, cosa que "__dataset" (que ordena por nombre) no garantiza.
+- "__split" (categórica) = tramo de la sesión ("all", "game", "1st.half", "2nd.half", bloques del entrenamiento). Están ANIDADOS y las filas se repiten por tramo; la vista ya filtra en "all". No agrupes ni filtres por "__split" salvo pedido explícito de comparar tramos.
+- Para CONTAR filas ("cuántas lesiones", "cuántas sesiones") usá aggregation "count" sobre una columna que esté SIEMPRE cargada —la del nombre del jugador, o la de fecha—, nunca sobre una métrica opcional: count cuenta las filas que tienen ese valor, así que apuntarlo a una columna con huecos devuelve un total más chico que el real.
+- En una tabla con "row_grain":"player", la primera columna YA es el nombre del jugador: la agrega el renderer sola. No la repitas agregando "__player_nombre" en "columns" o la tabla sale con la columna Jugador dos veces.
 - Al elegir varios datasets, solo podés usar columnas que existan en TODOS ellos (te indico las columnas de cada uno).
 
 DATOS FALTANTES Y DIMENSIONES DEL PLANTEL (crítico para no armar widgets vacíos):

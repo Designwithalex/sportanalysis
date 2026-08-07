@@ -20,6 +20,17 @@ class WidgetSchema
         '__familia' => 'categorica',
         '__sub_familia' => 'categorica',
         '__player_nombre' => 'texto',
+        // Fecha REAL de la sesión (datasets.fecha_sesion), no la de carga. Es sintética y no una
+        // columna del CSV a propósito: así un eje temporal siempre existe, sin depender de que el
+        // archivo traiga una columna de fecha con un nombre que el detector reconozca.
+        '__fecha' => 'fecha',
+        // Parte de la sesión: 'all' (entera), 'game', '1st.half', 'Activacion'... Los tramos del
+        // GPS están anidados, así que sin filtrar por esto los totales se cuentan varias veces.
+        // Ver WidgetRenderer::splitColumn(). Vale 'all' en los datasets que no tienen tramos.
+        '__split' => 'categorica',
+        // Puesto concreto del jugador (pilar izquierdo, hooker, apertura…), de la metadata del
+        // plantel. Ordena por número de camiseta, no alfabéticamente — ver Puestos.
+        '__puesto' => 'categorica',
     ];
 
     /**

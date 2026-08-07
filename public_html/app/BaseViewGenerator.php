@@ -44,11 +44,14 @@ require_once __DIR__ . '/CategoryPermission.php';
  * vez, así que no hay una sola habilitación que alcance para autorizarlo. Ese gate sigue siendo el
  * del endpoint (api/base_views.php).
  *
- * QUÉ CATEGORÍAS TIENEN VISTA BASE: las que Categorias::tieneVistaBase() marca (fuerza, partidos,
- * kinesiología, nutrición). `otros` no —es el bolsón de lo que no encaja, y un tablero
- * autogenerado sobre datasets que no comparten ni columnas ni sentido no dice nada— y
- * `entrenamientos` tampoco por ahora. Las dos siguen siendo categorías válidas para subir datos y
- * para armar vistas a mano.
+ * QUÉ CATEGORÍAS TIENEN VISTA BASE: las que Categorias::tieneVistaBase() marca (partidos,
+ * entrenamientos, fuerza, kinesiología, nutrición). `otros` no —es el bolsón de lo que no encaja, y
+ * un tablero autogenerado sobre datasets que no comparten ni columnas ni sentido no dice nada—,
+ * pero sigue siendo una categoría válida para subir datos y para armar vistas a mano.
+ *
+ * TRAMOS DE LA SESIÓN. Las vistas base cuyos datasets vengan del GPS nacen con un filtro global
+ * `__split = all` (ver filtroTramoEntero()). No es un detalle de presentación: sin él los totales
+ * se cuentan una vez por tramo y salen multiplicados por tres o cuatro.
  */
 class BaseViewGenerator
 {
@@ -187,7 +190,15 @@ PROMPT;
             throw new RuntimeException('La IA no generó ningún widget válido para ' . $label . '. Detalle: ' . implode(' | ', $skipped));
         }
 
-        $viewId = $this->upsertView('cluster', $label, ['categoria' => $categoria], $intent, $datasetIds, $widgets);
+        $viewId = $this->upsertView(
+            'cluster',
+            $label,
+            ['categoria' => $categoria],
+            $intent,
+            $datasetIds,
+            $widgets,
+            self::filtroTramoEntero($datasets)
+        );
         return ['view_id' => $viewId, 'nombre' => $label, 'created' => count($widgets), 'skipped' => $skipped];
     }
 
@@ -254,6 +265,9 @@ PROMPT;
         }
         $datasetIds = array_keys($datasetIds);
 
+        // Fuera del bucle: es el mismo para las 84 vistas y adentro serían 84 consultas iguales.
+        $filtroTramo = self::filtroTramoEntero($this->fetchDatasets('1 = 1', []));
+
         $created = [];
         foreach ($players as $p) {
             $nombre = 'Overview — ' . $p['nombre'];
@@ -264,11 +278,41 @@ PROMPT;
                 'Overview de performance de ' . $p['nombre'],
                 $datasetIds,
                 $templateWidgets,
-                ['column' => '__player_nombre', 'value' => $p['nombre']]
+                array_merge([['column' => '__player_nombre', 'value' => $p['nombre']]], $filtroTramo)
             );
             $created[] = ['view_id' => $viewId, 'nombre' => $nombre];
         }
         return $created;
+    }
+
+    /**
+     * El filtro global que deja la vista en la sesión ENTERA, o vacío si no hace falta.
+     *
+     * Los exportadores de GPS mandan una fila por jugador Y POR TRAMO, anidados: en un partido
+     * `all`, `game`, `1st.half` y `2nd.half`, donde las dos mitades suman `game`. Una vista sin
+     * este filtro suma los cuatro y reporta el triple de metros de los que se corrieron. Por eso
+     * las vistas base nacen recortadas a `all` y el tramo queda como filtro editable: mirar el
+     * segundo tiempo es cambiarle el valor, no armar otra vista.
+     *
+     * Devuelve vacío si ningún dataset de la vista tiene tramos (fuerza, nutrición, kinesiología):
+     * ahí el filtro sería ruido en la UI, porque solo existe el valor 'all'.
+     *
+     * @param array<int,array<string,mixed>> $datasets filas de `datasets` con column_schema decodificado
+     * @return array<int,array{column:string,value:string}>
+     */
+    private static function filtroTramoEntero(array $datasets): array
+    {
+        foreach ($datasets as $d) {
+            $schema = is_array($d['column_schema'] ?? null)
+                ? $d['column_schema']
+                : (json_decode((string) ($d['column_schema'] ?? ''), true) ?: []);
+
+            if (WidgetRenderer::splitColumn($schema) !== null) {
+                return [['column' => '__split', 'value' => 'all']];
+            }
+        }
+
+        return [];
     }
 
     // ---------------------------------------------------------------------
@@ -280,9 +324,11 @@ PROMPT;
      * con los widgets dados. Devuelve el view_id.
      * @param array{categoria?:string,player_id?:int} $key
      * @param array<int,array{type:string,config:array}> $widgets
-     * @param array{column:string,value:string}|null $globalFilter filtro global de vista (overview jugador)
+     * @param array<int,array{column:string,value:string}> $globalFilters filtros globales de la vista.
+     *        Son varios y no uno: el overview de un jugador necesita recortarse a ese jugador Y al
+     *        tramo 'all' de cada sesión al mismo tiempo.
      */
-    private function upsertView(string $tipo, string $nombre, array $key, string $intent, array $datasetIds, array $widgets, ?array $globalFilter = null): int
+    private function upsertView(string $tipo, string $nombre, array $key, string $intent, array $datasetIds, array $widgets, array $globalFilters = []): int
     {
         $clubId = $this->clubId();
 
@@ -370,15 +416,16 @@ PROMPT;
                 $vStmt->execute([$clubId, (int) $this->pdo->lastInsertId(), $encoded]);
             }
 
-            if ($globalFilter !== null) {
-                $this->pdo->prepare(
-                    'INSERT INTO view_filters (club_id, view_id, dataset_id, column_name, filter_type, config)
-                     VALUES (?, ?, NULL, ?, "valores", ?)'
-                )->execute([
+            $fStmt = $this->pdo->prepare(
+                'INSERT INTO view_filters (club_id, view_id, dataset_id, column_name, filter_type, config)
+                 VALUES (?, ?, NULL, ?, "valores", ?)'
+            );
+            foreach ($globalFilters as $f) {
+                $fStmt->execute([
                     $clubId,
                     $viewId,
-                    $globalFilter['column'],
-                    json_encode(['operator' => 'eq', 'value' => $globalFilter['value']], JSON_UNESCAPED_UNICODE),
+                    $f['column'],
+                    json_encode(['operator' => 'eq', 'value' => $f['value']], JSON_UNESCAPED_UNICODE),
                 ]);
             }
 
@@ -610,6 +657,10 @@ REGLAS GENERALES:
 - Columnas marcadas "[SIN DATOS]" están vacías o en cero: NUNCA armes un widget sobre ellas ni agrupes por ellas.
 - Para el puesto/posición usá la columna sintética "__sub_familia"; para back/forward usá "__familia". Vienen del plantel y siempre tienen datos. No uses columnas del CSV tipo "PUESTO"/"POSICION".
 - Columnas sintéticas siempre disponibles (categóricas/texto): "__dataset" (partido/sesión de origen), "__familia", "__sub_familia", "__player_nombre".
+- "__fecha" (tipo fecha) = fecha REAL del partido/sesión, no la de carga. Es el eje temporal correcto: usala como "x_column" cuando el widget deba mostrar evolución en el tiempo y quieras el orden cronológico de verdad. "__dataset" ordena por nombre del dataset, que no siempre es cronológico.
+- "__split" (categórica) = tramo de la sesión: "all" (entera), "game", "1st.half", "2nd.half", o los bloques del entrenamiento. Los tramos están ANIDADOS y las filas vienen repetidas por tramo, así que la vista ya trae un filtro global en "all" y los totales dan bien. NO agrupes ni filtres por "__split" salvo que el pedido sea explícitamente comparar tramos (ej "primer vs segundo tiempo").
+- Para CONTAR filas ("cuántas lesiones", "cuántas sesiones") usá aggregation "count" sobre una columna que esté SIEMPRE cargada —la del nombre del jugador, o la de fecha—, nunca sobre una métrica opcional: count cuenta las filas que tienen ese valor, así que apuntarlo a una columna con huecos devuelve un total más chico que el real.
+- En una tabla con "row_grain":"player", la primera columna YA es el nombre del jugador: la agrega el renderer sola. No la repitas agregando "__player_nombre" en "columns" o la tabla sale con la columna Jugador dos veces.
 - Solo columnas "numerica" sirven como metric/base_metric/y_metrics con agregaciones distintas de "count". Las "categorica" (incluidas las sintéticas) son las únicas válidas para group_by/segment_column.
 
 Los 5 tipos de widget y la forma EXACTA de su config (config SIEMPRE lleva "dataset_ids": [int, ...]):

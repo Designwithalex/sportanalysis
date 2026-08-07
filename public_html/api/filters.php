@@ -39,7 +39,11 @@ if ($method === 'POST') {
 
     // Solo columnas universales: son las que existen en cualquier dataset, así el filtro global
     // no depende de a qué dataset pertenece cada widget.
-    $universalColumns = ['__familia', '__sub_familia', '__player_nombre'];
+    //
+    // `__split` (parte de la sesión) entra acá porque el renderer la sintetiza para TODOS los
+    // datasets —vale 'all' en los que no tienen tramos—, así que cumple la misma condición. Es
+    // además el filtro que evita el conteo múltiple de los tramos anidados del GPS.
+    $universalColumns = ['__familia', '__sub_familia', '__player_nombre', '__split'];
     if ($viewId <= 0 || !in_array($columnName, $universalColumns, true)) {
         respondError(400, 'Dimensión de filtro inválida.');
     }

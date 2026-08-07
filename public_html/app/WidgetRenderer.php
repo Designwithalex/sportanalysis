@@ -1,6 +1,8 @@
 <?php
 
 require_once __DIR__ . '/Auth.php';
+require_once __DIR__ . '/ExcelDate.php';
+require_once __DIR__ . '/Puestos.php';
 
 /**
  * Unico lugar que convierte config JSON (generado por IA o por el editor manual) en
@@ -141,8 +143,8 @@ class WidgetRenderer
         // NULL no admite FK compuesta), así que a nivel base nada impide que un player_id
         // apunte a otro club. El JOIN es lo único que lo corta.
         $stmt = $this->pdo->prepare(
-            "SELECT r.raw_data, r.player_id, d.nombre AS dataset_nombre,
-                    p.nombre AS player_nombre, p.familia, p.sub_familia
+            "SELECT r.raw_data, r.player_id, r.dataset_id, d.nombre AS dataset_nombre, d.fecha_sesion, d.column_schema,
+                    p.nombre AS player_nombre, p.familia, p.sub_familia, p.metadata AS player_metadata
              FROM dataset_rows r
              INNER JOIN datasets d ON d.id = r.dataset_id AND d.club_id = r.club_id
              LEFT JOIN players p ON p.id = r.player_id AND p.club_id = r.club_id
@@ -150,13 +152,42 @@ class WidgetRenderer
         );
         $stmt->execute([...$datasetIds, $clubId]);
         $rows = [];
+        $schemaCache = [];
         foreach ($stmt->fetchAll() as $row) {
             $data = json_decode($row['raw_data'], true) ?? [];
+
+            // Las columnas de fecha se guardan CRUDAS (la serie de Excel tal cual venía en el CSV,
+            // "46095") porque el principio del Paso 2 es no transformar el archivo del usuario. La
+            // traducción a algo legible pasa acá, que es el único lugar por donde los widgets leen
+            // datos: así el dato original queda intacto y ningún gráfico muestra un número de serie.
+            // Cacheado por dataset_id, no por nombre: los nombres son editables y nada impide dos
+            // datasets homónimos, que compartirían schema sin tener por qué.
+            $dsId = (int) $row['dataset_id'];
+            $schemaCache[$dsId] ??= json_decode((string) $row['column_schema'], true) ?: [];
+            foreach ($schemaCache[$dsId] as $col => $tipo) {
+                if ($tipo === 'fecha' && isset($data[$col]) && ($iso = ExcelDate::normalize((string) $data[$col])) !== null) {
+                    $data[$col] = $iso;
+                }
+            }
+
             $data['__player_id'] = $row['player_id'];
             $data['__player_nombre'] = $row['player_nombre'];
             $data['__familia'] = $row['familia'];
             $data['__sub_familia'] = $row['sub_familia'];
+            // Puesto concreto (pilar izquierdo / hooker / apertura…). Sale de la metadata libre del
+            // plantel, que es donde lo deja la carga del CSV. Más fino que __sub_familia, que es la
+            // línea; los dos ordenan por número de camiseta (ver Puestos).
+            $meta = json_decode((string) ($row['player_metadata'] ?? ''), true);
+            $data['__puesto'] = is_array($meta) ? ($meta['Posicion'] ?? null) : null;
             $data['__dataset'] = $row['dataset_nombre'];
+            // Parte de la sesión (ver splitColumn()). Los datasets sin splits valen 'all', así que
+            // la columna existe siempre y un filtro global por __split no rompe nada.
+            $splitCol = self::splitColumn($schemaCache[$dsId]);
+            $data['__split'] = $splitCol !== null ? trim((string) ($data[$splitCol] ?? 'all')) : 'all';
+            // Fecha real de la sesión, no la de carga. Sintética como __dataset: le da a cualquier
+            // widget un eje temporal confiable sin depender de que el CSV traiga columna de fecha
+            // con un nombre reconocible, y es la base de los filtros por período.
+            $data['__fecha'] = $row['fecha_sesion'];
             $rows[] = $data;
         }
 
@@ -168,6 +199,38 @@ class WidgetRenderer
         $excluded = (int) $excludedStmt->fetchColumn();
 
         return [$rows, $excluded];
+    }
+
+    /**
+     * La columna del dataset que dice a qué PARTE de la sesión corresponde la fila, o null.
+     *
+     * EL PROBLEMA QUE RESUELVE, que es de conteo y no cosmético. Los exportadores de GPS no mandan
+     * una fila por jugador: mandan una por jugador Y POR TRAMO, y los tramos están ANIDADOS. En un
+     * partido son cuatro —`all`, `game`, `1st.half`, `2nd.half`— donde `1st.half + 2nd.half = game`
+     * y `all` es la sesión completa; en un entrenamiento son `all` más cada bloque (`Activacion`,
+     * `Unidades`, `Juego`...). Sumar la columna sin filtrar cuenta lo mismo tres o cuatro veces:
+     * para un jugador que corrió 8.088 m en un partido, la suma da 24.235 m.
+     *
+     * Por eso `__split` se expone como columna sintética y las vistas base nacen con un filtro
+     * global en `all`: el total queda bien de entrada, y abrir por tiempo o por bloque es cambiar
+     * el valor del filtro en vez de un análisis aparte.
+     *
+     * Pública porque steps/analysis.php la necesita para armar la lista de valores del filtro:
+     * si allá se escribiera de nuevo "la columna que se llama Split Name", serían dos definiciones
+     * de lo mismo y el día que una acepte un encabezado nuevo la otra dejaría de ofrecerlo.
+     *
+     * @param array<string,string> $schema column_schema del dataset
+     */
+    public static function splitColumn(array $schema): ?string
+    {
+        foreach (array_keys($schema) as $col) {
+            $n = mb_strtolower(trim((string) $col), 'UTF-8');
+            if ($n === 'split name' || $n === 'split' || $n === 'period') {
+                return (string) $col;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -209,6 +272,24 @@ class WidgetRenderer
         $numCell = is_numeric($cell) ? (float) str_replace(',', '.', (string) $cell) : null;
         $numValue = is_numeric($value) ? (float) $value : null;
 
+        // Las comparaciones de orden también valen para FECHAS. Sin esto, "sesiones de los últimos
+        // 14 días" no filtraba nada: una fecha ISO no es numérica, así que gte/lte devolvían false
+        // en todas las filas y el tablero quedaba vacío. En formato YYYY-MM-DD el orden alfabético
+        // ES el orden cronológico, así que alcanza con compararlas como texto.
+        if ($numCell === null && self::esFechaIso($cell) && self::esFechaIso($value)) {
+            $cmp = strcmp((string) $cell, (string) $value);
+
+            return match ($operator) {
+                'eq' => $cmp === 0,
+                'neq' => $cmp !== 0,
+                'gt' => $cmp > 0,
+                'gte' => $cmp >= 0,
+                'lt' => $cmp < 0,
+                'lte' => $cmp <= 0,
+                default => true,
+            };
+        }
+
         return match ($operator) {
             'eq' => (string) $cell === (string) $value,
             'neq' => (string) $cell !== (string) $value,
@@ -218,6 +299,33 @@ class WidgetRenderer
             'lte' => $numCell !== null && $numValue !== null && $numCell <= $numValue,
             default => true,
         };
+    }
+
+    /** ¿Es una fecha 'YYYY-MM-DD'? Solo la forma: quien la produjo ya la validó. */
+    private static function esFechaIso($v): bool
+    {
+        return is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) === 1;
+    }
+
+    /**
+     * Mete la agregación del widget adentro del metric ref.
+     *
+     * En KPI, barras y apiladas la agregación vive en el config del WIDGET (`aggregation`) y la
+     * columna en un sub-objeto (`metric` / `base_metric`) que no la lleva. extractValue necesita
+     * verla para resolver `count`, que es el único caso donde el tipo de la columna no importa.
+     * Sin esto, contar una columna de texto —"cuántas lesiones hay", contando el nombre del
+     * jugador— devolvía null en cada fila y el widget mostraba "s/d"; la única forma de que
+     * `count` funcionara era apuntarlo a una columna numérica, y ahí cuenta las filas que TIENEN
+     * ese número, que es otra cosa. En tablas no hace falta: cada columna ya trae su agregación.
+     *
+     * Si el ref ya define `aggregation`, gana la suya.
+     *
+     * @param array<string,mixed> $ref
+     * @return array<string,mixed>
+     */
+    private static function withAggregation(array $ref, ?string $aggregation): array
+    {
+        return $ref + ['aggregation' => $aggregation];
     }
 
     /** Extrae el valor numerico de una fila para un metric ref (columna directa o metrica configurable). */
@@ -288,7 +396,8 @@ class WidgetRenderer
 
     private function renderKpiCard(array $config, array $rows, array $customMetrics): array
     {
-        $values = array_map(fn($row) => self::extractValue($config['metric'], $row, $customMetrics), $rows);
+        $metric = self::withAggregation($config['metric'], $config['aggregation'] ?? null);
+        $values = array_map(fn($row) => self::extractValue($metric, $row, $customMetrics), $rows);
         $value = self::aggregate($values, $config['aggregation']);
 
         $decimals = $config['number_format']['decimals'] ?? 1;
@@ -331,6 +440,9 @@ class WidgetRenderer
             '__familia' => 'Familia',
             '__sub_familia' => 'Sub-familia',
             '__dataset' => 'Partido',
+            '__fecha' => 'Fecha',
+            '__split' => 'Parte',
+            '__puesto' => 'Puesto',
         ];
         $labelHeader = $grainHeaders[$grain] ?? $grain;
 
@@ -392,6 +504,16 @@ class WidgetRenderer
             usort($computed, function ($a, $b) use ($sortCol, $dir) {
                 $va = $a[$sortCol] ?? 0;
                 $vb = $b[$sortCol] ?? 0;
+
+                // Si la columna trae puestos o líneas, se ordena por número de camiseta y no
+                // alfabéticamente: un plantel se lee 1-15, y alfabético mete al hooker entre dos
+                // wines. Puestos::comparar() devuelve null cuando no son puestos, y ahí sigue el
+                // orden de siempre.
+                $porPuesto = Puestos::comparar(is_scalar($va) ? (string) $va : null, is_scalar($vb) ? (string) $vb : null);
+                if ($porPuesto !== null) {
+                    return $dir === 'asc' ? $porPuesto : -$porPuesto;
+                }
+
                 return $dir === 'asc' ? $va <=> $vb : $vb <=> $va;
             });
         }
@@ -538,10 +660,11 @@ class WidgetRenderer
         $categoryColumn = $config['category_column'];
         $aggregation = $config['aggregation'] ?? 'avg';
 
+        $metric = self::withAggregation($config['metric'], $aggregation);
         $buckets = [];
         foreach ($rows as $row) {
             $cat = $row[$categoryColumn] ?? 'N/D';
-            $buckets[$cat][] = self::extractValue($config['metric'], $row, $customMetrics);
+            $buckets[$cat][] = self::extractValue($metric, $row, $customMetrics);
         }
 
         $categories = array_keys($buckets);
@@ -553,7 +676,10 @@ class WidgetRenderer
         if (($config['order'] ?? 'alphabetical') === 'ranking') {
             arsort($values);
         } else {
-            ksort($values);
+            // "alphabetical" ordena por número de camiseta cuando el eje son puestos o líneas:
+            // un gráfico de barras por puesto se lee 1-15, no de la A a la Z. Para cualquier otra
+            // categoría (nombres, partidos) sigue siendo alfabético.
+            uksort($values, fn ($a, $b) => Puestos::comparar((string) $a, (string) $b) ?? strnatcasecmp((string) $a, (string) $b));
         }
 
         $datasets = [['label' => $config['title'] ?? 'Valor', 'data' => array_values($values)]];
@@ -580,11 +706,12 @@ class WidgetRenderer
         $categoryColumn = $config['category_column'];
         $segmentColumn = $config['segment_column'];
 
+        $baseMetric = self::withAggregation($config['base_metric'], $config['aggregation'] ?? null);
         $buckets = []; // [category][segment] = [values]
         foreach ($rows as $row) {
             $cat = $row[$categoryColumn] ?? 'N/D';
             $seg = $row[$segmentColumn] ?? 'N/D';
-            $buckets[$cat][$seg][] = self::extractValue($config['base_metric'], $row, $customMetrics);
+            $buckets[$cat][$seg][] = self::extractValue($baseMetric, $row, $customMetrics);
         }
 
         $categories = array_keys($buckets);

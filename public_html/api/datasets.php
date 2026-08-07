@@ -20,7 +20,8 @@ if ($method === 'GET') {
     // El club_id va en el ON del LEFT JOIN además del WHERE: si solo estuviera en el WHERE, las
     // filas del join seguirían viniendo de cualquier club e inflarían los contadores.
     $listStmt = $pdo->prepare(
-        'SELECT d.id, d.nombre, d.categoria, d.original_filename, d.column_schema, d.player_column_name, d.uploaded_at,
+        'SELECT d.id, d.nombre, d.categoria, d.original_filename, d.column_schema, d.player_column_name,
+                d.fecha_sesion, d.uploaded_at,
                 COUNT(r.id) AS row_count,
                 SUM(CASE WHEN r.match_status = "matched" THEN 1 ELSE 0 END) AS matched_count,
                 SUM(CASE WHEN r.match_status = "unmatched" THEN 1 ELSE 0 END) AS unmatched_count
@@ -106,6 +107,15 @@ function handleUpload(PDO $pdo): void
     $columnSchema = ColumnTypeDetector::detect($headers, $rows);
     $playerColumn = ColumnTypeDetector::guessPlayerColumn($headers);
 
+    // Fecha REAL de la sesión, leída de los datos. No es lo mismo que `uploaded_at`: el CSV de un
+    // entrenamiento del lunes se sube el miércoles, y hasta ahora la sesión quedaba registrada como
+    // del miércoles porque no había ninguna otra fecha para usar. NULL si el archivo no trae una
+    // (la planilla de antropometrías, por ejemplo) — es un dato opcional, no un error.
+    $dateColumn = ColumnTypeDetector::guessDateColumn($columnSchema);
+    $fechaSesion = $dateColumn !== null
+        ? ExcelDate::fechaDeSesion(array_column($rows, $dateColumn))
+        : null;
+
     $originalFilename = $_FILES['csv']['name'];
     $nombre = trim($_POST['nombre'] ?? '') ?: pathinfo($originalFilename, PATHINFO_FILENAME);
 
@@ -120,8 +130,8 @@ function handleUpload(PDO $pdo): void
     $pdo->beginTransaction();
     try {
         $stmt = $pdo->prepare(
-            'INSERT INTO datasets (club_id, nombre, categoria, original_filename, column_schema, player_column_name)
-             VALUES (:club_id, :nombre, :categoria, :original_filename, :column_schema, :player_column_name)'
+            'INSERT INTO datasets (club_id, nombre, categoria, original_filename, column_schema, player_column_name, fecha_sesion)
+             VALUES (:club_id, :nombre, :categoria, :original_filename, :column_schema, :player_column_name, :fecha_sesion)'
         );
         $stmt->execute([
             'club_id' => $clubId,
@@ -130,6 +140,7 @@ function handleUpload(PDO $pdo): void
             'original_filename' => $originalFilename,
             'column_schema' => json_encode($columnSchema, JSON_UNESCAPED_UNICODE),
             'player_column_name' => $playerColumn,
+            'fecha_sesion' => $fechaSesion,
         ]);
         $datasetId = (int) $pdo->lastInsertId();
 
@@ -179,6 +190,7 @@ function handleUpload(PDO $pdo): void
         'row_count' => $insertedCount,
         'unmatched_count' => $unmatchedCount,
         'player_column_name' => $playerColumn,
+        'fecha_sesion' => $fechaSesion,
         'column_schema' => $columnSchema,
     ]);
 }

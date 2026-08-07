@@ -3,6 +3,7 @@ require __DIR__ . '/../app/bootstrap_page.php';
 require_once __DIR__ . '/../app/Categorias.php';
 require_once __DIR__ . '/../app/CategoryPermission.php';
 require_once __DIR__ . '/../app/ViewPermission.php';
+require_once __DIR__ . '/../app/WidgetRenderer.php';   // splitColumn(): qué columna trae el tramo de la sesión
 requireAuth();
 
 $pageTitle = 'SportAnalysis';
@@ -135,7 +136,7 @@ $openBaseViews = isset($_GET['base_views']);
 // Valores posibles para los filtros globales de vista (dimensiones universales del plantel).
 // Solo del plantel del club: este array viaja al HTML como DIM_VALUES y llena el datalist del
 // modal de filtros — con la tabla entera, filtrar por "Jugador" ofrecería nombres de otros clubes.
-$dimValues = ['__familia' => [], '__sub_familia' => [], '__player_nombre' => []];
+$dimValues = ['__familia' => [], '__sub_familia' => [], '__player_nombre' => [], '__split' => []];
 $stmt = $pdo->prepare('SELECT nombre, familia, sub_familia FROM players WHERE club_id = :club ORDER BY nombre');
 $stmt->execute(['club' => $clubId]);
 foreach ($stmt->fetchAll() as $p) {
@@ -143,7 +144,53 @@ foreach ($stmt->fetchAll() as $p) {
     if ($p['sub_familia'] !== null && $p['sub_familia'] !== '') $dimValues['__sub_familia'][$p['sub_familia']] = true;
     if ($p['nombre'] !== null && $p['nombre'] !== '') $dimValues['__player_nombre'][$p['nombre']] = true;
 }
+
+// __split no sale del plantel sino de los datos: son los tramos que trae el exportador de GPS
+// ('all', 'game', '1st.half', 'Activacion'...). Se leen con un DISTINCT por columna —no trayendo
+// las filas a PHP— porque dataset_rows crece con cada sesión que se sube.
+$splitCols = [];
+$dsStmt = $pdo->prepare('SELECT column_schema FROM datasets WHERE club_id = :club');
+$dsStmt->execute(['club' => $clubId]);
+foreach ($dsStmt->fetchAll(PDO::FETCH_COLUMN) as $rawSchema) {
+    $col = WidgetRenderer::splitColumn(json_decode((string) $rawSchema, true) ?: []);
+    if ($col !== null) {
+        $splitCols[$col] = true;
+    }
+}
+foreach (array_keys($splitCols) as $col) {
+    // El nombre de la columna va como parámetro dentro del path JSON, no concatenado al SQL.
+    $vStmt = $pdo->prepare(
+        'SELECT DISTINCT JSON_UNQUOTE(JSON_EXTRACT(raw_data, CONCAT(\'$."\', :col, \'"\'))) AS v
+         FROM dataset_rows WHERE club_id = :club'
+    );
+    $vStmt->execute(['col' => $col, 'club' => $clubId]);
+    foreach ($vStmt->fetchAll(PDO::FETCH_COLUMN) as $v) {
+        $v = trim((string) $v);
+        if ($v !== '' && $v !== 'null') {
+            $dimValues['__split'][$v] = true;
+        }
+    }
+}
+if ($dimValues['__split']) {
+    $dimValues['__split']['all'] = true;   // siempre ofrecible: es el default y el total de la sesión
+}
+
 foreach ($dimValues as $k => $v) { $dimValues[$k] = array_keys($v); }
+
+// Datasets de la vista ACTIVA, para el desplegable "Partido / sesión" del filtro rápido.
+// Los de la vista y no los del club: ofrecer un partido que ningún widget de esta vista usa
+// devolvería un tablero vacío y parecería un error.
+$datasetsDeLaVista = [];
+if ($activeViewId > 0) {
+    $stmt = $pdo->prepare(
+        'SELECT d.nombre FROM view_datasets vd
+         INNER JOIN datasets d ON d.id = vd.dataset_id AND d.club_id = vd.club_id
+         WHERE vd.view_id = :view AND vd.club_id = :club
+         ORDER BY d.fecha_sesion IS NULL, d.fecha_sesion, d.nombre'
+    );
+    $stmt->execute(['view' => $activeViewId, 'club' => $clubId]);
+    $datasetsDeLaVista = $stmt->fetchAll(PDO::FETCH_COLUMN);
+}
 
 /**
  * Tabs inline de una fila. El `title` lleva el nombre completo porque el nombre visible se trunca
@@ -283,6 +330,14 @@ require __DIR__ . '/../app/views/head.php';
                 <div class="tb-left">
                     <button class="btn-secondary btn" id="metrics-btn" type="button" title="Métricas configurables">Métricas</button>
                     <button class="btn-secondary btn" id="filters-btn" type="button">Filtros</button>
+                    <!-- Exporta lo que se está viendo, filtros incluidos: es imprimir a PDF con el
+                         diálogo del navegador (ver la sección @media print de components.css). -->
+                    <button class="btn-secondary btn" id="export-pdf-btn" type="button"
+                            title="Exportar este tablero a PDF, con los filtros aplicados">Exportar PDF</button>
+                    <!-- La planificación no es una vista de widgets (es un editor de días y %), así
+                         que no entra en la barra de tabs: se accede desde acá. -->
+                    <a class="btn-secondary btn" href="planificacion.php"
+                       title="Planificar la carga de la semana en % de un partido">Planificación</a>
                     <div class="tb-menu-wrap">
                         <button class="btn-secondary btn tb-more-btn" id="view-actions-btn" type="button"
                                 aria-haspopup="menu" aria-expanded="false" aria-controls="view-actions-menu" aria-label="Más acciones de la vista">⋯</button>
@@ -352,6 +407,75 @@ require __DIR__ . '/../app/views/head.php';
                         <button class="btn" id="add-widget-btn" type="button"><span class="btn-spark" aria-hidden="true">✦</span> Agregar widget</button>
                     </div>
                 <?php endif; ?>
+            </div>
+
+            <?php
+            // Filtro rápido: recorta TODOS los widgets de la vista a la vez. Es una lente de
+            // lectura y no se guarda — los "Filtros" del modal sí son configuración de la vista y
+            // los ve todo el club, por eso escribirlos pide permiso de admin y esto no.
+            //
+            // Cada dimensión se ofrece solo si tiene valores: en el tablero de nutrición no hay
+            // tramos de sesión, y un desplegable con una sola opción es ruido.
+            $quickDims = [
+                '__familia'       => ['label' => 'Línea',    'todos' => 'Todas las líneas',  'valores' => $dimValues['__familia']],
+                '__sub_familia'   => ['label' => 'Puesto',   'todos' => 'Todos los puestos', 'valores' => $dimValues['__sub_familia']],
+                '__player_nombre' => ['label' => 'Jugador',  'todos' => 'Todo el plantel',   'valores' => $dimValues['__player_nombre']],
+                '__dataset'       => ['label' => 'Sesión',   'todos' => 'Todas las sesiones', 'valores' => $datasetsDeLaVista],
+                // El vacío NO dice "todos": la vista ya trae el filtro guardado en `all`, así que
+                // no elegir nada es ver la sesión entera. Decir "todos los tramos" prometería una
+                // suma de tramos anidados, que es justo el conteo múltiple que se evita.
+                '__split'         => ['label' => 'Parte',    'todos' => 'Sesión entera',     'valores' => $dimValues['__split']],
+            ];
+            $quickDims = array_filter($quickDims, fn ($d) => count($d['valores']) > 1);
+
+            // El período se ofrece solo si hay sesiones fechadas: sobre datos sin fecha —la planilla
+            // de antropometrías, el registro de lesiones— filtrar por tiempo no haría nada.
+            $hayFechas = false;
+            if ($activeViewId > 0) {
+                $stmt = $pdo->prepare(
+                    'SELECT COUNT(*) FROM view_datasets vd
+                     INNER JOIN datasets d ON d.id = vd.dataset_id AND d.club_id = vd.club_id
+                     WHERE vd.view_id = :view AND vd.club_id = :club AND d.fecha_sesion IS NOT NULL'
+                );
+                $stmt->execute(['view' => $activeViewId, 'club' => $clubId]);
+                $hayFechas = (int) $stmt->fetchColumn() > 0;
+            }
+            ?>
+            <?php if ($quickDims || $hayFechas): ?>
+                <div class="quick-filters" id="quick-filters" role="group" aria-label="Filtro rápido del tablero">
+                    <span class="qf-lead">Ver</span>
+                    <?php if ($hayFechas): ?>
+                        <label class="qf-item">
+                            <span class="qf-label">Período</span>
+                            <select class="qf-select" data-dim="periodo">
+                                <option value="">Todo el período</option>
+                                <option value="7d">Últimos 7 días</option>
+                                <option value="14d">Últimos 14 días</option>
+                                <option value="30d">Últimos 30 días</option>
+                                <option value="mes">Mes actual</option>
+                            </select>
+                        </label>
+                    <?php endif; ?>
+                    <?php foreach ($quickDims as $dim => $d): ?>
+                        <label class="qf-item">
+                            <span class="qf-label"><?= htmlspecialchars($d['label']) ?></span>
+                            <select class="qf-select" data-dim="<?= htmlspecialchars($dim) ?>">
+                                <option value=""><?= htmlspecialchars($d['todos']) ?></option>
+                                <?php foreach ($d['valores'] as $v): ?>
+                                    <option value="<?= htmlspecialchars((string) $v) ?>"><?= htmlspecialchars((string) $v) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </label>
+                    <?php endforeach; ?>
+                    <button class="qf-clear" id="quick-filters-clear" type="button" hidden>Limpiar</button>
+                </div>
+            <?php endif; ?>
+
+            <!-- Encabezado que solo existe en papel: sin esto el PDF es una captura de pantalla sin
+                 contexto y no se sabe de qué vista, de qué club ni con qué recorte salió. -->
+            <div class="print-header" id="print-header">
+                <h1 class="print-title"><?= htmlspecialchars($activeViewName !== '' ? $activeViewName : 'Tablero') ?></h1>
+                <div class="print-meta"></div>
             </div>
 
             <div id="alert-box"></div>
@@ -615,6 +739,7 @@ require __DIR__ . '/../app/views/head.php';
                     <option value="__familia">Familia (back/forward)</option>
                     <option value="__sub_familia">Sub-familia</option>
                     <option value="__player_nombre">Jugador</option>
+                    <option value="__split">Parte de la sesión</option>
                 </select>
             </div>
             <div class="field">
@@ -648,6 +773,9 @@ const BASE_CLUSTERS = <?= json_encode($baseClusters, JSON_UNESCAPED_UNICODE) ?>;
 const PLAYER_COUNT = <?= $playerCount ?>;
 const OPEN_BASE_VIEWS = <?= $openBaseViews ? 'true' : 'false' ?>;
 const ACTIVE_VIEW_NAME = <?= json_encode($activeViewName, JSON_UNESCAPED_UNICODE) ?>;
+// Va en el encabezado del PDF: un tablero impreso circula por fuera de la app y tiene que decir
+// de qué club es.
+const PRINT_CLUB = <?= json_encode(Auth::user()['club_nombre'] ?? '', JSON_UNESCAPED_UNICODE) ?>;
 // Etiquetas de categoría desde el servidor, NO hardcodeadas en el JS. widgets.js tenía su propia
 // copia y agrupaba con Object.keys() sobre ella: una categoría que faltara en esa lista no salía
 // sin etiqueta, directamente NO SE VEÍA en el editor de widgets. Con kinesiología eso significaba

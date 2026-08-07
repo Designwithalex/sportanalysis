@@ -9,6 +9,13 @@ const SYNTHETIC_COLUMNS = {
     '__familia': 'categorica',
     '__sub_familia': 'categorica',
     '__player_nombre': 'texto',
+    // Fecha real de la sesión (no la de carga). Único eje temporal confiable del sistema.
+    '__fecha': 'fecha',
+    // Parte de la sesión ('all', 'game', '1st.half', 'Activacion'...). Los tramos del GPS están
+    // anidados: sin filtrar por esto, los totales se cuentan varias veces.
+    '__split': 'categorica',
+    // Puesto concreto del jugador. Más fino que __sub_familia (que es la línea).
+    '__puesto': 'categorica',
 };
 
 function escapeHtml(str) {
@@ -54,6 +61,107 @@ function columnsOfType(dataset, types) {
         .map(([name]) => name);
 }
 
+// ---------- Filtro rápido ----------
+//
+// Recorta TODOS los widgets de la vista a la vez: elegir "Forwards" deja el tablero entero en
+// forwards, y los totales se recalculan porque los recalcula el servidor sobre las filas que
+// quedan. No confundir con los "Filtros" del modal, que son configuración guardada de la vista y
+// la ve todo el club: esto es una lente del momento, vive en memoria y se va al recargar.
+//
+// Espejo de FILTROS_RAPIDOS en api/widgets.php. Una clave de más acá no rompe nada —el servidor la
+// descarta— pero el usuario vería un control que no hace nada.
+const quickFilters = {};
+
+function quickFilterQuery() {
+    return Object.entries(quickFilters)
+        .filter(([, v]) => v)
+        .map(([k, v]) => `&q[${encodeURIComponent(k)}]=${encodeURIComponent(v)}`)
+        .join('');
+}
+
+/** Cuántas dimensiones están recortando ahora mismo. Alimenta el contador del botón "Limpiar". */
+function quickFilterCount() {
+    return Object.values(quickFilters).filter(Boolean).length;
+}
+
+function wireQuickFilters() {
+    const bar = document.getElementById('quick-filters');
+    if (!bar) return;
+
+    const limpiar = document.getElementById('quick-filters-clear');
+
+    const refrescar = () => {
+        const n = quickFilterCount();
+        limpiar.hidden = n === 0;
+        limpiar.textContent = n === 1 ? 'Limpiar filtro' : `Limpiar ${n} filtros`;
+        bar.classList.toggle('is-active', n > 0);
+    };
+
+    bar.querySelectorAll('select[data-dim]').forEach((sel) => {
+        sel.addEventListener('change', () => {
+            quickFilters[sel.dataset.dim] = sel.value;
+            refrescar();
+            loadWidgets();
+        });
+    });
+
+    limpiar.addEventListener('click', () => {
+        bar.querySelectorAll('select[data-dim]').forEach((sel) => {
+            sel.value = '';
+            quickFilters[sel.dataset.dim] = '';
+        });
+        refrescar();
+        loadWidgets();
+    });
+
+    refrescar();
+}
+
+// ---------- Exportar PDF ----------
+//
+// "Exportar" es imprimir a PDF con el diálogo del navegador. No hay librería de PDF: el hosting es
+// PHP compartido sin Composer y la única dependencia de frontend permitida es Chart.js. A cambio
+// sirve para CUALQUIER vista con un solo mecanismo —el tablero de partidos, el de fuerza por
+// familia, el de kinesiología— en vez de un exportador por tablero.
+
+/** Texto de qué recorte está aplicado, para que el PDF no mienta sobre a qué se refieren los números. */
+function printFilterSummary() {
+    const partes = [];
+    document.querySelectorAll('#quick-filters select[data-dim]').forEach((sel) => {
+        if (!sel.value) return;
+        const etiqueta = sel.closest('.qf-item')?.querySelector('.qf-label')?.textContent ?? sel.dataset.dim;
+        const valor = sel.options[sel.selectedIndex]?.textContent ?? sel.value;
+        partes.push(`${etiqueta}: ${valor}`);
+    });
+    return partes.length ? partes.join('  ·  ') : 'Sin filtros — plantel completo';
+}
+
+/**
+ * Los gráficos se imprimen tal cual: Chrome renderiza el <canvas> de Chart.js en el PDF y, como
+ * Chart.js es responsive, hasta se redibuja al ancho de la hoja.
+ *
+ * La receta habitual para esto es cambiar cada canvas por un <img> sacado con toDataURL(). Acá no
+ * se hace, y conviene dejarlo escrito para no "arreglarlo" de nuevo: probado contra este mismo
+ * tablero, la lectura del canvas devolvió un bitmap vacío (cero píxeles opacos) aunque el gráfico
+ * se viera perfecto en pantalla, así que el PDF salía con todos los recuadros en blanco. El canvas
+ * directo funciona y además es una pieza móvil menos.
+ */
+function setupPrint() {
+    const btn = document.getElementById('export-pdf-btn');
+    if (!btn) return;
+
+    // Sobre beforeprint y no adentro del click: así el PDF también sale bien si el usuario imprime
+    // con Ctrl+P en vez de usar el botón.
+    window.addEventListener('beforeprint', () => {
+        const head = document.getElementById('print-header');
+        if (!head) return;
+        head.querySelector('.print-meta').textContent =
+            `${PRINT_CLUB}  ·  ${printFilterSummary()}  ·  emitido ${new Date().toLocaleDateString('es-AR')}`;
+    });
+
+    btn.addEventListener('click', () => window.print());
+}
+
 // ---------- Widget grid ----------
 
 async function loadWidgets() {
@@ -63,7 +171,7 @@ async function loadWidgets() {
     grid.innerHTML = '<div class="empty-state">Cargando...</div>';
 
     try {
-        const result = await Api.get(`../api/widgets.php?view_id=${ACTIVE_VIEW_ID}`);
+        const result = await Api.get(`../api/widgets.php?view_id=${ACTIVE_VIEW_ID}${quickFilterQuery()}`);
         currentWidgets = result.widgets;
         grid.innerHTML = '';
         // El rótulo del botón de generación depende de cuántos widgets hay: recién acá se sabe.
@@ -457,6 +565,9 @@ const SYNTH_LABELS = {
     __sub_familia: 'Sub-familia',
     __player_nombre: 'Jugador',
     __dataset: 'Partido (dataset)',
+    __fecha: 'Fecha de la sesión',
+    __split: 'Parte de la sesión',
+    __puesto: 'Puesto',
 };
 
 /** Filtro propio del widget: dropdown con las columnas del schema efectivo del widget. */
@@ -630,9 +741,21 @@ const SECTION_BUILDERS = {
     `,
 };
 
+// Etiquetas de agregación en castellano. "máximo (mejor dato)" no es cosmético: en fuerza el número
+// que le importa al preparador es el mejor levantamiento del período, no el promedio de todos los
+// intentos —que incluye los de entrada en calor y lo baja—, y con el desplegable diciendo "max"
+// nadie encontraba esa opción.
+const AGG_OPTION_LABELS = {
+    sum: 'suma',
+    avg: 'promedio',
+    min: 'mínimo',
+    max: 'máximo (mejor dato)',
+    count: 'conteo',
+};
+
 function aggOptions(selected) {
     return ['sum', 'avg', 'min', 'max', 'count'].map(a =>
-        `<option value="${a}" ${a === selected ? 'selected' : ''}>${a}</option>`
+        `<option value="${a}" ${a === selected ? 'selected' : ''}>${AGG_OPTION_LABELS[a]}</option>`
     ).join('');
 }
 
@@ -685,7 +808,7 @@ function rowGrainOptions(dataset, selected) {
 }
 
 function tableAggOptions(selected) {
-    const labels = { sum: 'sum', avg: 'avg', min: 'min', max: 'max', count: 'count', text: 'texto (mostrar tal cual)' };
+    const labels = { ...AGG_OPTION_LABELS, text: 'texto (mostrar tal cual)' };
     return ['sum', 'avg', 'min', 'max', 'count', 'text'].map(a =>
         `<option value="${a}" ${a === selected ? 'selected' : ''}>${labels[a]}</option>`
     ).join('');
@@ -1885,7 +2008,7 @@ async function createMetric() {
 
 // ---------- Filters modal ----------
 
-const DIM_LABELS = { __familia: 'Familia', __sub_familia: 'Sub-familia', __player_nombre: 'Jugador' };
+const DIM_LABELS = { __familia: 'Familia', __sub_familia: 'Sub-familia', __player_nombre: 'Jugador', __split: 'Parte de la sesión' };
 
 function setupFiltersModal() {
     const modal = document.getElementById('filters-modal');
@@ -1999,6 +2122,9 @@ if (document.getElementById('widget-grid')) {
     setupAiModal();
     setupMetricsModal();
     setupFiltersModal();
+    // Antes de loadWidgets(): así el primer render ya sale con lo que la barra tenga seleccionado.
+    wireQuickFilters();
+    setupPrint();
     setupOverflowMenu('view-actions-btn', 'view-actions-menu');
     document.getElementById('generate-view-btn')?.addEventListener('click', runViewGeneration);
     loadWidgets();

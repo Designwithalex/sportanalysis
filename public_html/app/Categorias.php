@@ -38,9 +38,9 @@ final class Categorias
      *   columnas    → columnas sugeridas de la grilla de carga a mano (steps/carga_manual.php).
      *                 Sugerencia editable, no un esquema: el usuario agrega y saca las que quiera.
      *
-     * `entrenamientos` no tiene vista base y NO se borra: está en el ENUM de la base y hay
-     * datasets de producción que la usan. Sacarla de acá haría que esos datasets dejaran de
-     * listarse y que su categoría fuera rechazada como inválida.
+     * Ninguna entrada se BORRA de acá aunque parezca en desuso: los valores están en el ENUM de la
+     * base y hay datasets de producción que los usan. Sacar una clave haría que esos datasets
+     * dejaran de listarse y que su categoría fuera rechazada como inválida.
      */
     private const DEFS = [
         'partidos' => [
@@ -50,7 +50,7 @@ final class Categorias
         ],
         'entrenamientos' => [
             'label'      => 'Entrenamientos',
-            'vista_base' => false,
+            'vista_base' => true,
             'columnas'   => ['Duración (min)', 'RPE', 'Carga', 'Distancia (m)', 'Player Load'],
         ],
         'fuerza' => [
@@ -159,13 +159,13 @@ final class Categorias
      * ¿Esta categoría tiene vista base del club (el tablero `views.tipo='cluster'` que arma
      * BaseViewGenerator)?
      *
-     * Cuatro la tienen: fuerza, partidos, kinesiología y nutrición — las que corresponden a una
-     * especialidad con un responsable concreto adentro del club, que es también el eje de los
-     * permisos por categoría (ver CategoryPermission).
+     * Cinco la tienen: partidos, entrenamientos, fuerza, kinesiología y nutrición — el flujo de la
+     * semana más las especialidades, cada una con un responsable concreto adentro del club, que es
+     * también el eje de los permisos por categoría (ver CategoryPermission).
      *
-     * `otros` no: es el bolsón de lo que no encaja, y un tablero autogenerado sobre datasets que
-     * no comparten ni columnas ni sentido no dice nada. `entrenamientos` tampoco, por ahora.
-     * Las dos siguen siendo categorías válidas para subir datos y para armar vistas a mano.
+     * `otros` no: es el bolsón de lo que no encaja, y un tablero autogenerado sobre datasets que no
+     * comparten ni columnas ni sentido no dice nada. Sigue siendo una categoría válida para subir
+     * datos y para armar vistas a mano.
      */
     public static function tieneVistaBase(string $categoria): bool
     {

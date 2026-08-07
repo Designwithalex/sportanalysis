@@ -5,6 +5,21 @@ require __DIR__ . '/../app/ViewPermission.php';
 require __DIR__ . '/../app/WidgetSchema.php';
 require __DIR__ . '/../app/WidgetRenderer.php';
 
+/**
+ * Dimensiones que admite la barra de filtro rápido del dashboard.
+ *
+ * Es un subconjunto cerrado: lo que llega acá se compara contra las columnas sintéticas que el
+ * renderer inyecta en toda fila, así que un nombre fuera de esta lista no filtraría nada — o peor,
+ * filtraría contra una columna propia de un dataset y devolvería resultados distintos según qué
+ * dataset use cada widget.
+ *
+ * Va ACÁ ARRIBA y no al lado de adHocFilters(), que sería su lugar natural: las funciones de este
+ * archivo se hoistean, las constantes NO. El dispatch de abajo llama a handleList() y termina con
+ * exit, así que un `const` declarado más abajo nunca llega a ejecutarse y la constante queda sin
+ * definir justo en la request que la necesita.
+ */
+const FILTROS_RAPIDOS = ['__familia', '__sub_familia', '__player_nombre', '__dataset', '__split'];
+
 // Guard de sesión. Va antes de session_write_close() (lee $_SESSION) y antes de tocar la base.
 // Además valida el token anti-CSRF en todo método que no sea GET/HEAD.
 requireAuth();
@@ -51,7 +66,7 @@ function handleList(PDO $pdo): void
     $stmt->execute(['view_id' => $viewId, 'club' => Auth::clubId()]);
     $widgets = $stmt->fetchAll();
 
-    $globalFilters = loadActiveFilters($pdo, $viewId);
+    $globalFilters = mergeFilters(loadActiveFilters($pdo, $viewId), adHocFilters());
 
     $renderer = new WidgetRenderer($pdo);
     $out = [];
@@ -90,6 +105,95 @@ function handleList(PDO $pdo): void
     }
 
     echo json_encode(['ok' => true, 'widgets' => $out]);
+}
+
+/**
+ * Filtros que manda la barra del dashboard, en `?q[__familia]=forward&q[__split]=1st.half`.
+ *
+ * NO SE PERSISTEN, Y ESA ES LA DECISIÓN. Los `view_filters` son configuración de la vista: viven
+ * en la base, los ve todo el club cuando la vista es del club, y por eso escribirlos está gateado
+ * a un admin. Pero mirar los forwards y después los backs no es reconfigurar el tablero de todos:
+ * es una lente de UN usuario durante diez segundos. Guardarla obligaría a pedir permiso de admin
+ * para filtrar, y le cambiaría el dashboard al resto del club sin que se enteren.
+ *
+ * Al ser solo lectura no hace falta permiso de escritura ni token CSRF: es un GET que recorta lo
+ * que ya se podía ver.
+ *
+ * @return array<int,array{column:string,operator:string,value:mixed}>
+ */
+function adHocFilters(): array
+{
+    $crudos = $_GET['q'] ?? null;
+    if (!is_array($crudos)) {
+        return [];
+    }
+
+    $out = [];
+    foreach ($crudos as $columna => $valor) {
+        // Un valor vacío es "sin filtro en esta dimensión", que es como la barra manda el estado
+        // "Todos". No es un filtro por string vacío.
+        if (!is_string($valor) || trim($valor) === '') {
+            continue;
+        }
+        $valor = trim($valor);
+
+        // `periodo` no es una columna sino un atajo: se traduce a un piso sobre __fecha, la fecha
+        // REAL de la sesión. El corte se calcula en el servidor y no en el navegador porque la
+        // fecha del cliente puede estar en cualquier lado, y "últimos 7 días" tiene que significar
+        // lo mismo para todos los del club.
+        if ($columna === 'periodo') {
+            if ($desde = fechaDeCorte($valor)) {
+                $out[] = ['column' => '__fecha', 'operator' => 'gte', 'value' => $desde];
+            }
+            continue;
+        }
+
+        if (!in_array($columna, FILTROS_RAPIDOS, true)) {
+            continue;
+        }
+        $out[] = ['column' => $columna, 'operator' => 'eq', 'value' => $valor];
+    }
+
+    return $out;
+}
+
+/**
+ * Fecha desde la que cuenta un período, o null si el período no se reconoce (= sin filtro).
+ *
+ * Los períodos son relativos a HOY, no a la última sesión cargada: "últimos 7 días" tiene que
+ * poder dar vacío. Si contara desde la última sesión, un plantel que no entrena hace un mes
+ * mostraría igual su última semana de actividad y parecería que entrenó.
+ */
+function fechaDeCorte(string $periodo): ?string
+{
+    return match ($periodo) {
+        '7d'  => date('Y-m-d', strtotime('-7 days')),
+        '14d' => date('Y-m-d', strtotime('-14 days')),
+        '30d' => date('Y-m-d', strtotime('-30 days')),
+        'mes' => date('Y-m-01'),
+        default => null,
+    };
+}
+
+/**
+ * Combina los filtros guardados de la vista con los de la barra. A misma columna gana el de la
+ * barra: son excluyentes, y sumarlos daría `__split = all AND __split = 1st.half`, que no matchea
+ * ninguna fila y le mostraría al usuario un tablero vacío en vez del primer tiempo que pidió.
+ *
+ * @param array<int,array{column:string,operator:string,value:mixed}> $guardados
+ * @param array<int,array{column:string,operator:string,value:mixed}> $rapidos
+ * @return array<int,array{column:string,operator:string,value:mixed}>
+ */
+function mergeFilters(array $guardados, array $rapidos): array
+{
+    $pisadas = array_column($rapidos, 'column');
+
+    $out = array_values(array_filter(
+        $guardados,
+        fn (array $f) => !in_array($f['column'], $pisadas, true)
+    ));
+
+    return array_merge($out, $rapidos);
 }
 
 /** @return array<int,array{column:string,operator:string,value:mixed}> filtros globales de la vista */

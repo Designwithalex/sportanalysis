@@ -2562,3 +2562,483 @@ button.view-tab-add:hover { color: var(--text); }
 #miembros {
     scroll-margin-top: var(--space-5);
 }
+
+/* ── Filtro rápido del tablero ───────────────────────────────────────────────────────────────
+   Recorta todos los widgets de la vista a la vez (línea, puesto, jugador, sesión, tramo).
+   Es una lente de lectura, no configuración guardada: por eso vive pegado a la grilla y no
+   adentro del modal de "Filtros", que sí escribe estado compartido por todo el club. */
+.quick-filters {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-4);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    /* La barra se tiñe cuando hay algo recortando: sin esta señal, un tablero filtrado y uno
+       completo se ven igual y los números parecen mal. */
+    border-left: 3px solid transparent;
+    transition: border-left-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.quick-filters.is-active {
+    border-left-color: var(--accent);
+    background: var(--signal-wash);
+}
+
+.qf-lead {
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+}
+
+.qf-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+}
+
+.qf-label {
+    font-size: 0.75rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+}
+
+.qf-select {
+    font-family: var(--font-ui);
+    font-size: 0.875rem;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-2);
+    max-width: 15rem;
+}
+
+.qf-select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.qf-clear {
+    margin-left: auto;
+    font-family: var(--font-ui);
+    font-size: 0.8125rem;
+    color: var(--accent-strong);
+    background: none;
+    border: none;
+    border-bottom: 1px solid currentColor;
+    padding: 0 0 1px;
+    cursor: pointer;
+}
+
+.qf-clear:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* En mobile los desplegables ocupan el ancho: a 360px, cinco selects en fila quedan de 60px
+   y no se puede leer ningún nombre de jugador. */
+@media (max-width: 640px) {
+    .quick-filters { gap: var(--space-2); }
+    .qf-item { flex: 1 1 100%; justify-content: space-between; }
+    .qf-select { flex: 1 1 auto; max-width: none; margin-left: var(--space-2); }
+    .qf-clear { margin-left: 0; }
+}
+
+/* ── Impresión / Exportar PDF ────────────────────────────────────────────────────────────────
+   Exportar es imprimir a PDF con el diálogo del navegador, no una librería. El hosting es PHP
+   compartido sin Composer y la única dependencia de frontend permitida es Chart.js, así que
+   cualquier generador real (FPDF, dompdf, Puppeteer) o se sube a mano y hay que mantenerlo, o
+   directamente no entra. Además esto sirve a CUALQUIER vista —partidos, fuerza, kinesiología— con
+   una sola hoja de estilos, en vez de un exportador distinto por tablero.
+
+   Las gráficas se cambian por imágenes antes de imprimir (ver preparePrint en widgets.js): un
+   <canvas> de Chart.js sale en blanco o deformado en el render de impresión. */
+@media print {
+    @page {
+        margin: 14mm 12mm;
+    }
+
+    /* Fondo blanco y tinta negra: el tema del dashboard tiene fondos teñidos que en papel salen
+       grises y se comen el contraste de los números, que es lo único que importa acá. */
+    :root {
+        --bg: #fff;
+        --surface: #fff;
+        --surface-sunken: #fff;
+        --text: #000;
+        --text-muted: #333;
+        --text-faint: #555;
+        --border: #999;
+    }
+
+    body {
+        background: #fff;
+        color: #000;
+    }
+
+    /* Todo lo que es navegación o acción no existe en papel. */
+    .appbar,
+    .publicnav,
+    .view-rail,
+    .dash-toolbar,
+    .quick-filters,
+    .widget-controls,
+    .widget-menu,
+    .modal-overlay,
+    .btn,
+    .btn-secondary,
+    .scale-selector,
+    .table-search,
+    .print-hide {
+        display: none !important;
+    }
+
+    /* El encabezado de impresión sí: es lo que convierte una captura de pantalla en un documento
+       (qué vista, de qué club, con qué recorte y a qué fecha). Lo llena widgets.js. */
+    .print-header {
+        display: block !important;
+        margin-bottom: 8mm;
+        padding-bottom: 3mm;
+        border-bottom: 1.5pt solid #000;
+    }
+
+    .print-title {
+        font-family: var(--font-display);
+        font-size: 20pt;
+        line-height: 1.1;
+        margin: 0;
+    }
+
+    .print-meta {
+        font-family: var(--font-mono);
+        font-size: 8pt;
+        color: #333;
+        margin-top: 2mm;
+    }
+
+    /* Una columna: dos widgets a lo ancho de una A4 dejan las tablas ilegibles. */
+    .dash-grid {
+        display: block !important;
+    }
+
+    .widget-card {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        border: 0.5pt solid #999;
+        border-radius: 0;
+        margin: 0 0 6mm;
+        padding: 4mm;
+        box-shadow: none;
+    }
+
+    .widget-title {
+        font-size: 11pt;
+        font-weight: 600;
+    }
+
+    /* Las tablas se cortan por fila, nunca a la mitad de una, y repiten encabezado por página. */
+    .table-scroll {
+        overflow: visible !important;
+    }
+
+    .data-table {
+        width: 100%;
+        font-size: 8.5pt;
+        border-collapse: collapse;
+    }
+
+    .data-table thead {
+        display: table-header-group;
+    }
+
+    .data-table tr {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    .data-table th,
+    .data-table td {
+        border: 0.5pt solid #bbb;
+        padding: 1.2mm 2mm;
+    }
+
+    /* El canvas de Chart.js se imprime tal cual y se redibuja al ancho de la hoja. No convertirlo
+       a <img>: la lectura del canvas devuelve un bitmap vacío en algunos entornos y el PDF sale
+       con los gráficos en blanco (ver setupPrint en widgets.js). */
+    #widget-grid canvas {
+        max-width: 100%;
+    }
+
+    /* El aviso de filas excluidas se imprime: un PDF que se comparte sin decir que dejó tres
+       jugadores afuera es peor que no exportarlo. */
+    .widget-warning {
+        border: 0.5pt solid #999;
+        font-size: 8pt;
+        padding: 1.5mm 2mm;
+    }
+}
+
+/* Fuera de impresión el encabezado del documento no ocupa lugar. */
+.print-header {
+    display: none;
+}
+
+/* ── Planificación semanal ───────────────────────────────────────────────────────────────────
+   Carga planificada por día en % de un partido, con el semáforo objetivo vs realizado. */
+.plan-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.plan-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: 0 0 var(--space-1);
+}
+
+.plan-title {
+    font-family: var(--font-display);
+    font-size: 1.8rem;
+    line-height: 1.1;
+    margin: 0;
+}
+
+.plan-nav {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+/* El número grande de la semana: es la respuesta a "¿cuánta carga metimos?" y merece leerse
+   de lejos, en medio de un entrenamiento. */
+.plan-resumen {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    padding: var(--space-4);
+    margin-bottom: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-md);
+}
+
+.plan-resumen-num {
+    font-family: var(--font-mono);
+    font-size: 2.6rem;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--accent-strong);
+}
+
+.plan-resumen-pct {
+    font-size: 1.2rem;
+    color: var(--text-faint);
+}
+
+.plan-resumen-txt {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.plan-leyenda {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.75rem;
+    color: var(--text-faint);
+}
+
+.sem {
+    display: inline-block;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 2px;
+    vertical-align: middle;
+}
+
+.sem-verde   { background: var(--moss); }
+.sem-amarillo { background: var(--amber); }
+.sem-rojo    { background: var(--clay); }
+
+.plan-dia {
+    margin-bottom: var(--space-4);
+}
+
+.plan-dia-vacio {
+    opacity: 0.72;
+}
+
+.plan-dia-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-3);
+}
+
+.plan-dia-nombre {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    min-width: 9rem;
+}
+
+.plan-dia-carga {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 2px;
+}
+
+.plan-pct {
+    width: 4.5rem;
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+    text-align: right;
+    padding: var(--space-1) var(--space-2);
+    background: var(--surface-sunken);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.plan-pct-ro {
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+}
+
+.plan-pct-sign {
+    color: var(--text-faint);
+}
+
+.plan-nota {
+    flex: 1 1 14rem;
+    font-size: 0.85rem;
+    padding: var(--space-1) var(--space-2);
+    background: var(--surface-sunken);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.plan-nota-ro { font-size: 0.85rem; color: var(--text-muted); }
+
+.plan-dia-libre,
+.plan-dia-sindatos {
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 2px var(--space-2);
+}
+
+.plan-th-metrica {
+    text-align: center !important;
+    border-bottom: 1px solid var(--border);
+}
+
+.plan-th-sub {
+    font-size: 0.68rem !important;
+    font-weight: 400 !important;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+}
+
+.plan-tabla td { font-family: var(--font-mono); }
+.plan-tabla td:first-child { font-family: var(--font-ui); }
+
+.plan-obj { color: var(--text-faint); }
+
+.plan-un {
+    font-size: 0.7em;
+    margin-left: 2px;
+    color: var(--text-faint);
+}
+
+/* El color va sobre el REALIZADO, no sobre el objetivo: el objetivo es la vara, no la noticia. */
+.plan-real { font-weight: 600; }
+.plan-real.sem-verde    { background: var(--moss-wash);  color: var(--moss); }
+.plan-real.sem-amarillo { background: var(--amber-wash); color: var(--amber); }
+.plan-real.sem-rojo     { background: var(--clay-wash);  color: var(--clay); }
+
+.plan-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: var(--space-3) 0;
+}
+
+.plan-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.85rem;
+    padding: var(--space-1) var(--space-3);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+}
+
+.plan-chip-x {
+    background: none;
+    border: none;
+    color: var(--text-faint);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+}
+
+.plan-chip-x:hover { color: var(--clay); }
+
+.plan-metrica-add { align-items: flex-end; }
+
+@media (max-width: 640px) {
+    .plan-leyenda { margin-left: 0; width: 100%; }
+    .plan-dia-nombre { min-width: 0; }
+}
+
+/* En papel: sin navegación ni controles, y los días libres no ocupan lugar. */
+@media print {
+    .plan-nav,
+    .plan-metricas-card,
+    .plan-dia-vacio {
+        display: none !important;
+    }
+
+    .plan-head { display: none !important; }
+
+    .plan-resumen {
+        border: 0.5pt solid #999;
+        break-inside: avoid;
+    }
+
+    .plan-dia { break-inside: avoid; page-break-inside: avoid; }
+
+    /* El semáforo tiene que sobrevivir a la impresión: por defecto el navegador descarta los
+       fondos, y sin color la tabla pierde justamente lo que se quería comunicar. */
+    .plan-real.sem-verde,
+    .plan-real.sem-amarillo,
+    .plan-real.sem-rojo {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}

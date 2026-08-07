@@ -192,12 +192,19 @@ CREATE TABLE datasets (
     original_filename   VARCHAR(255) NULL,
     column_schema       JSON NOT NULL COMMENT 'nombre de columna -> tipo detectado (numerica/texto/fecha/categorica)',
     player_column_name  VARCHAR(150) NULL COMMENT 'columna del CSV identificada como nombre de jugador',
+    -- Fecha REAL del partido/sesión, leída de los datos (columna `Date` del GPS, que llega como
+    -- serie de Excel — ver app/ExcelDate.php). Es distinta de uploaded_at y esa distinción es el
+    -- punto: un entrenamiento del lunes cuyo CSV se sube el miércoles es del lunes. Antes no había
+    -- ninguna fecha de sesión y todo el análisis histórico usaba, sin querer, la fecha de carga.
+    -- NULL cuando el archivo no trae fecha (p. ej. la planilla de antropometrías).
+    fecha_sesion        DATE NULL COMMENT 'fecha real de la sesion/partido, derivada de los datos; NO la fecha de carga',
     uploaded_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_datasets_club FOREIGN KEY (club_id) REFERENCES clubs(id),
     UNIQUE KEY uq_datasets_id_club (id, club_id) COMMENT 'target de las FKs compuestas de las tablas hijas',
     INDEX idx_datasets_categoria (categoria),
-    INDEX idx_datasets_club (club_id)
+    INDEX idx_datasets_club (club_id),
+    INDEX idx_datasets_fecha_sesion (club_id, fecha_sesion) COMMENT 'filtros temporales del dashboard'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
@@ -441,4 +448,71 @@ CREATE TABLE view_filters (
     INDEX idx_view_filters_view_club (view_id, club_id),
     INDEX idx_view_filters_dataset_club (dataset_id, club_id),
     INDEX idx_view_filters_club (club_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
+-- PLANIFICACIÓN SEMANAL
+--
+-- Ver sql/migration_2026_08_planificacion.sql para el detalle de por qué el
+-- baseline (el 100% de cada línea) NO se guarda: se recalcula de los partidos.
+-- ---------------------------------------------------------------------------
+CREATE TABLE planes_semana (
+    id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
+    -- Siempre el LUNES de la semana. Normalizar la fecha al lunes es lo que permite que el UNIQUE
+    -- de abajo signifique "una planificación por semana": con una fecha cualquiera, dos usuarios
+    -- planificando la misma semana desde días distintos crearían dos planes que no se ven entre sí.
+    fecha_inicio  DATE NOT NULL COMMENT 'lunes de la semana planificada',
+    nota          VARCHAR(255) NULL COMMENT 'texto libre del cuerpo técnico (ej: "semana de descarga")',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_planes_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    UNIQUE KEY uq_planes_club_semana (club_id, fecha_inicio),
+    UNIQUE KEY uq_planes_id_club (id, club_id) COMMENT 'target de las FKs compuestas de las hijas',
+    INDEX idx_planes_club (club_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
+-- plan_dias — el día planificado y su carga, en % de un partido.
+-- ---------------------------------------------------------------------------
+CREATE TABLE plan_dias (
+    id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
+    plan_id       INT UNSIGNED NOT NULL,
+    fecha         DATE NOT NULL,
+    -- SMALLINT y no DECIMAL: nadie planifica al 62,5%. El techo de 500 es una red contra el dedo
+    -- pegado en el teclado, no una regla deportiva (>100% es normal en pretemporada).
+    porcentaje    SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '% de la carga de un partido',
+    nota          VARCHAR(255) NULL COMMENT 'ej: "unidades + juego", "solo activación"',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_plan_dias_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    CONSTRAINT fk_plan_dias_plan_club FOREIGN KEY (plan_id, club_id) REFERENCES planes_semana(id, club_id) ON DELETE CASCADE,
+    CONSTRAINT ck_plan_dias_porcentaje CHECK (porcentaje <= 500),
+    UNIQUE KEY uq_plan_dias_fecha (plan_id, fecha) COMMENT 'un solo renglón por día dentro del plan',
+    INDEX idx_plan_dias_club (club_id),
+    INDEX idx_plan_dias_fecha (club_id, fecha)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
+-- plan_metricas — qué métricas mira este plan (la "preferencia" del ítem 3).
+--
+-- Van por PLAN y no en una tabla de preferencias aparte: así la semana nueva hereda las de la
+-- anterior copiándolas, y una semana vieja sigue mostrando lo que se miró cuando se planificó,
+-- en vez de reescribirse sola cuando alguien cambia la preferencia global.
+-- ---------------------------------------------------------------------------
+CREATE TABLE plan_metricas (
+    id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    club_id       INT UNSIGNED NOT NULL COMMENT 'club dueño de la fila',
+    plan_id       INT UNSIGNED NOT NULL,
+    -- Nombre de la columna tal cual viene del CSV del GPS ("Distance (metres)"). No es una FK a
+    -- ningún catálogo: las columnas son las del archivo del club y cambian entre exportadores.
+    columna       VARCHAR(150) NOT NULL,
+    label         VARCHAR(80) NOT NULL COMMENT 'cómo se muestra (ej: "Distancia")',
+    unidad        VARCHAR(16) NULL COMMENT 'ej: "m", "kg"',
+    position      TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    CONSTRAINT fk_plan_metricas_club FOREIGN KEY (club_id) REFERENCES clubs(id),
+    CONSTRAINT fk_plan_metricas_plan_club FOREIGN KEY (plan_id, club_id) REFERENCES planes_semana(id, club_id) ON DELETE CASCADE,
+    UNIQUE KEY uq_plan_metricas_col (plan_id, columna) COMMENT 'no repetir la misma métrica en un plan',
+    INDEX idx_plan_metricas_club (club_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

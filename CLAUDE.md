@@ -190,6 +190,89 @@ Antes de generar el dashboard, correr análisis sobre los datasets seleccionados
 - `custom_metrics` — id, view_id, dataset_id, nombre, formula (JSON: operación + columnas)
 - `view_filters` — id, view_id, dataset_id, column_name, filter_type
 
+## Columnas sintéticas (el contrato que hay que mantener en 4 lugares)
+
+`WidgetRenderer::loadRows()` inyecta columnas que no vienen del CSV y existen en **toda** fila de
+**todo** dataset. Son la base de los filtros globales, que por definición no pueden depender de qué
+dataset usa cada widget. Agregar una obliga a tocar los cuatro lugares o el sistema queda
+inconsistente en silencio: `WidgetSchema::SYNTHETIC_COLUMNS`, `js/widgets.js`
+(`SYNTHETIC_COLUMNS` + `SYNTH_LABELS`), las etiquetas de `WidgetRenderer`, y los prompts de
+`BaseViewGenerator` / `WidgetBuilder` / `ViewGenerator`.
+
+- `__dataset`, `__familia`, `__sub_familia`, `__player_nombre` — las originales.
+- **`__fecha`** — fecha REAL de la sesión (`datasets.fecha_sesion`), no la de carga. Único eje
+  temporal confiable. Ver abajo.
+- **`__split`** — tramo de la sesión. Ver abajo, es un problema de conteo.
+- **`__puesto`** — puesto concreto del jugador (`players.metadata.Posicion`), más fino que
+  `__sub_familia`. Ordena por número de camiseta vía `app/Puestos.php`, nunca alfabéticamente.
+
+### Los tramos del GPS están anidados (`__split`)
+
+Los exportadores de GPS mandan una fila por jugador **y por tramo**: en un partido `all`, `game`,
+`1st.half`, `2nd.half`, donde `1ª + 2ª = game`. Sumar sin recortar cuenta lo mismo tres o cuatro
+veces — el KPI del tablero de Partidos marcaba 1.863.961 m cuando el número real es 633.087 m.
+
+Las vistas base cuyos datasets tengan tramos **nacen con un filtro global `__split = all`**
+(`BaseViewGenerator::filtroTramoEntero()`). Al tocar cualquier widget de GPS, verificar que el
+recorte siga puesto.
+
+### La fecha de la sesión no es la de carga (`fecha_sesion`)
+
+`datasets.fecha_sesion` es la fecha del partido/entrenamiento, leída de los datos. Los CSV del GPS
+la traen como **número de serie de Excel** (`46095`), que el detector de tipos clasificaba
+`numerica`: por eso durante meses no hubo una sola columna de tipo `fecha` en la base y todo lo
+temporal caía sobre `uploaded_at`. La decodificación vive en `app/ExcelDate.php`.
+
+`fecha_sesion` queda en NULL cuando el archivo es un **log** y no una sesión (el registro de
+lesiones tiene una fecha por fila): el criterio es que la moda cubra el 80% de las filas. En esos
+datasets el eje temporal correcto es la columna de fecha de cada fila, no `__fecha`.
+
+Los valores de fecha se guardan **crudos** en `raw_data` (el principio del Paso 2 es no transformar
+el archivo); la traducción a algo legible pasa solo en `loadRows()`.
+
+## Filtros: dos mecanismos que no hay que mezclar
+
+- **`view_filters`** — configuración de la vista. Vive en la base y, sobre una vista del club, la ve
+  todo el club: por eso escribirla pide permiso de admin.
+- **Filtro rápido** (`?q[...]` en `api/widgets.php`) — lente de lectura de un usuario, no se
+  persiste. Es lo que permite mirar forwards y después backs sin pedir permiso ni cambiarle el
+  tablero al resto. A misma columna **pisa** al guardado, no se suma: `__split = all AND
+  __split = 1st.half` no matchearía ninguna fila.
+
+## Planificación semanal (`steps/planificacion.php`)
+
+Cuánta carga se le pide al plantel cada día, expresada en **% de un partido**: "lunes al 60%,
+miércoles al 70%, viernes al 60%" son 190% ≈ 1,9 partidos de carga en la semana.
+
+**No es una vista de widgets y no hay que meterla en la librería.** Es un editor estructurado
+(días, porcentaje, objetivo vs. realizado), no una grilla de gráficos. Pantalla propia, tablas
+propias (`planes_semana`, `plan_dias`, `plan_metricas`) y `app/Planificacion.php` como dominio.
+
+**El 100% se calcula, no se guarda.** Sale de los partidos ya cargados, promedio por jugador y por
+partido, **agrupado por línea** (`players.sub_familia`): el 100% de un Front Row son ~4.300 m y el
+de un Outside Back ~6.400 m. Guardar ese baseline en una tabla sería congelarlo — cada partido
+nuevo lo mueve, y una copia vieja haría que "60%" dejara de significar el 60% de lo que el plantel
+realmente corre.
+
+**Las dos puntas de la comparación tienen que recortar `Split Name = all`.** Es el mismo problema
+de tramos anidados de más arriba: sin el recorte, objetivos y realizado salen multiplicados por
+tres. `Planificacion` lo aplica en SQL porque estas consultas no pasan por `WidgetRenderer`.
+
+**Semáforo con banda de ±10%** (`Planificacion::TOLERANCIA`): verde = dio en el objetivo, amarillo
+= faltó, rojo = se pasó. La banda no es decorativa: el pedido original decía "verde: cumplió o
+superó" y "rojo: se pasó", que sin tolerancia son la misma celda pintada de dos colores.
+
+Escribir el plan es de `admin_club` — es uno solo por semana y por club, así que quien lo edita le
+cambia los objetivos a todos. Leerlo lo lee cualquier miembro.
+
+## Exportar PDF
+
+Es `window.print()` más la sección `@media print` de `components.css`. No hay librería de PDF: el
+hosting no tiene Composer y la única dependencia de frontend permitida es Chart.js. Sirve para
+cualquier vista con un solo mecanismo. **No convertir los `<canvas>` a `<img>` con `toDataURL()`**:
+se probó y la lectura devuelve un bitmap vacío aunque el gráfico se vea bien, así que el PDF sale
+con los recuadros en blanco. Chrome imprime el canvas directo y lo redibuja al ancho de la hoja.
+
 ## Librería fija de widgets (IA y editor manual comparten este espacio)
 
 1. **KPI card** — métrica (columna o métrica custom), agregación, filtro propio opcional, comparación opcional, formato de número, selector de escala % opcional (ver punto 6).

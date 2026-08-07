@@ -420,6 +420,10 @@ CÓMO CRUZAR DATOS (importante):
 - Cuando un widget abarca varios datasets tenés disponible la columna sintética "__dataset" (categórica) = el nombre del dataset de origen de cada fila, es decir el partido/sesión. Para "metros promedio por partido": dataset_ids con todos los partidos, eje/categoría = "__dataset", aggregation = "avg".
 - Al elegir varios datasets solo podés usar columnas que existan en TODOS ellos. En la práctica, agrupá en un mismo widget los datasets que comparten columnas (normalmente los de una misma categoría). NO mezcles categorías distintas en un mismo widget.
 - Otras columnas sintéticas siempre disponibles: "__familia" (back/forward), "__sub_familia" (puesto), "__player_nombre". Vienen del plantel y siempre tienen datos: para el puesto usá "__sub_familia" y no columnas del CSV tipo "PUESTO"/"POSICION", que suelen venir incompletas.
+- "__fecha" (tipo fecha) = fecha REAL del partido/sesión, no la de carga. Es el eje temporal correcto: usala como "x_column" para evolución en el tiempo. "__dataset" ordena por nombre del dataset, que no siempre es cronológico.
+- "__split" (categórica) = tramo de la sesión ("all", "game", "1st.half", "2nd.half", bloques del entrenamiento). Están ANIDADOS y las filas se repiten por tramo; la vista ya filtra en "all". No agrupes ni filtres por "__split" salvo pedido explícito de comparar tramos.
+- Para CONTAR filas ("cuántas lesiones", "cuántas sesiones") usá aggregation "count" sobre una columna que esté SIEMPRE cargada —la del nombre del jugador, o la de fecha—, nunca sobre una métrica opcional: count cuenta las filas que tienen ese valor, así que apuntarlo a una columna con huecos devuelve un total más chico que el real.
+- En una tabla con "row_grain":"player", la primera columna YA es el nombre del jugador: la agrega el renderer sola. No la repitas agregando "__player_nombre" en "columns" o la tabla sale con la columna Jugador dos veces.
 
 Los 5 tipos de widget y la forma EXACTA de su config (config SIEMPRE lleva "dataset_ids": [int, ...]):
 
