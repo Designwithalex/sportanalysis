@@ -18,17 +18,54 @@
 require_once __DIR__ . '/../Auth.php';
 
 $action = $appbarAction ?? ['href' => 'datos.php', 'label' => 'Configuración', 'icon' => '⚙'];
-$linkClass = 'appbar-link' . (!empty($action['primary']) ? ' appbar-link-primary' : '');
 
 $appbarUser = Auth::user();
 // Prefijo hasta la raíz pública ('' en la raíz, '../' desde steps/). Fallback '../' porque el
 // appbar hoy solo lo incluyen pantallas de steps/.
 $appbarRoot = function_exists('pageRootPrefix') ? pageRootPrefix() : '../';
+
+/**
+ * Acciones GLOBALES, a la izquierda de la del slot: aparecen en TODA pantalla que monte el appbar,
+ * no solo en el tablero.
+ *
+ * Planificación vive acá y no en la toolbar de analysis.php porque no es una acción SOBRE la vista
+ * activa —no depende de qué tab esté abierta— sino un destino propio de la app, del mismo rango que
+ * Configuración. En la toolbar quedaba mezclada con Métricas y Filtros, que sí operan sobre el
+ * tablero que estás mirando.
+ *
+ * El href se arma desde la raíz pública y NO relativo: este partial lo incluyen pantallas de dos
+ * niveles distintos (public_html/admin.php y public_html/steps/analysis.php), así que un
+ * "planificacion.php" a secas apuntaría a la raíz desde admin.php y daría 404. Las acciones del
+ * slot no tienen ese problema porque cada página escribe la suya al nivel que le corresponde.
+ *
+ * Se esconde en la pantalla que ya ES planificación: un link a donde ya estás es ruido.
+ */
+$appbarGlobales = [];
+if (basename((string) ($_SERVER['SCRIPT_NAME'] ?? '')) !== 'planificacion.php') {
+    $appbarGlobales[] = [
+        'href'  => $appbarRoot . 'steps/planificacion.php',
+        'label' => 'Planificación',
+        'icon'  => '◔',
+        // Primary donde la acción del slot NO lo es, que es el tablero (ahí el slot es
+        // "Configuración"). En las pantallas de carga el slot ya es "Ir a SportAnalysis" en
+        // primary, y dos botones primarios uno al lado del otro no jerarquizan nada: el destacado
+        // deja de significar "esto es lo que querés hacer acá".
+        'primary' => empty($action['primary']),
+        'title'   => 'Planificar la carga de la semana en % de un partido',
+    ];
+}
+
+$appbarLinkClass = static fn (array $a): string
+    => 'appbar-link' . (!empty($a['primary']) ? ' appbar-link-primary' : '');
 ?>
 <div class="appbar">
     <div class="appbar-brand">SportAnalysis <span class="appbar-sub">IA</span></div>
     <div class="tb-left">
-        <a class="<?= $linkClass ?>" href="<?= htmlspecialchars($action['href']) ?>"><span class="appbar-link-icon" aria-hidden="true"><?= htmlspecialchars($action['icon'] ?? '') ?></span> <?= htmlspecialchars($action['label']) ?></a>
+        <?php foreach ($appbarGlobales as $g): ?>
+            <a class="<?= $appbarLinkClass($g) ?>" href="<?= htmlspecialchars($g['href']) ?>"
+               <?= isset($g['title']) ? 'title="' . htmlspecialchars($g['title']) . '"' : '' ?>><span class="appbar-link-icon" aria-hidden="true"><?= htmlspecialchars($g['icon'] ?? '') ?></span> <?= htmlspecialchars($g['label']) ?></a>
+        <?php endforeach; ?>
+        <a class="<?= $appbarLinkClass($action) ?>" href="<?= htmlspecialchars($action['href']) ?>"><span class="appbar-link-icon" aria-hidden="true"><?= htmlspecialchars($action['icon'] ?? '') ?></span> <?= htmlspecialchars($action['label']) ?></a>
         <?php if ($appbarUser): ?>
             <div class="tb-menu-wrap">
                 <button class="btn-secondary btn appbar-user-btn" id="appbar-user-btn" type="button"

@@ -146,33 +146,52 @@ foreach ($stmt->fetchAll() as $p) {
 }
 
 // __split no sale del plantel sino de los datos: son los tramos que trae el exportador de GPS
-// ('all', 'game', '1st.half', 'Activacion'...). Se leen con un DISTINCT por columna —no trayendo
-// las filas a PHP— porque dataset_rows crece con cada sesión que se sube.
-$splitCols = [];
-$dsStmt = $pdo->prepare('SELECT column_schema FROM datasets WHERE club_id = :club');
-$dsStmt->execute(['club' => $clubId]);
-foreach ($dsStmt->fetchAll(PDO::FETCH_COLUMN) as $rawSchema) {
-    $col = WidgetRenderer::splitColumn(json_decode((string) $rawSchema, true) ?: []);
-    if ($col !== null) {
-        $splitCols[$col] = true;
-    }
-}
-foreach (array_keys($splitCols) as $col) {
-    // El nombre de la columna va como parámetro dentro del path JSON, no concatenado al SQL.
-    $vStmt = $pdo->prepare(
-        'SELECT DISTINCT JSON_UNQUOTE(JSON_EXTRACT(raw_data, CONCAT(\'$."\', :col, \'"\'))) AS v
-         FROM dataset_rows WHERE club_id = :club'
+// ('all', 'game', '1st.half', 'Activacion'...).
+//
+// SOLO DE LOS DATASETS DE LA VISTA ACTIVA, no de todo el club. Con el club entero, el tablero de
+// Fuerza ofrecía un desplegable "Parte de la sesión" con los tiempos de un partido: ninguno de sus
+// widgets tiene tramos, así que elegir cualquier valor vaciaba la pantalla. La dimensión existe
+// donde hay datos que la tengan, y en fuerza, kinesiología o nutrición eso no pasa.
+//
+// El DISTINCT se hace en SQL y no trayendo las filas a PHP porque dataset_rows crece con cada
+// sesión que se sube.
+if ($activeViewId > 0) {
+    $splitCols = [];
+    $dsStmt = $pdo->prepare(
+        'SELECT d.column_schema FROM view_datasets vd
+         INNER JOIN datasets d ON d.id = vd.dataset_id AND d.club_id = vd.club_id
+         WHERE vd.view_id = :view AND vd.club_id = :club'
     );
-    $vStmt->execute(['col' => $col, 'club' => $clubId]);
-    foreach ($vStmt->fetchAll(PDO::FETCH_COLUMN) as $v) {
-        $v = trim((string) $v);
-        if ($v !== '' && $v !== 'null') {
-            $dimValues['__split'][$v] = true;
+    $dsStmt->execute(['view' => $activeViewId, 'club' => $clubId]);
+    foreach ($dsStmt->fetchAll(PDO::FETCH_COLUMN) as $rawSchema) {
+        $col = WidgetRenderer::splitColumn(json_decode((string) $rawSchema, true) ?: []);
+        if ($col !== null) {
+            $splitCols[$col] = true;
         }
     }
-}
-if ($dimValues['__split']) {
-    $dimValues['__split']['all'] = true;   // siempre ofrecible: es el default y el total de la sesión
+
+    foreach (array_keys($splitCols) as $col) {
+        // El nombre de la columna va como parámetro dentro del path JSON, no concatenado al SQL.
+        // Las filas también se acotan a los datasets de la vista: si no, los tramos de un partido
+        // aparecerían como opción en una vista que solo mira entrenamientos.
+        $vStmt = $pdo->prepare(
+            'SELECT DISTINCT JSON_UNQUOTE(JSON_EXTRACT(r.raw_data, CONCAT(\'$."\', :col, \'"\'))) AS v
+             FROM dataset_rows r
+             INNER JOIN view_datasets vd ON vd.dataset_id = r.dataset_id AND vd.club_id = r.club_id
+             WHERE vd.view_id = :view AND r.club_id = :club'
+        );
+        $vStmt->execute(['col' => $col, 'view' => $activeViewId, 'club' => $clubId]);
+        foreach ($vStmt->fetchAll(PDO::FETCH_COLUMN) as $v) {
+            $v = trim((string) $v);
+            if ($v !== '' && $v !== 'null') {
+                $dimValues['__split'][$v] = true;
+            }
+        }
+    }
+
+    if ($dimValues['__split']) {
+        $dimValues['__split']['all'] = true;   // siempre ofrecible: es el default y el total de la sesión
+    }
 }
 
 foreach ($dimValues as $k => $v) { $dimValues[$k] = array_keys($v); }
@@ -334,10 +353,6 @@ require __DIR__ . '/../app/views/head.php';
                          diálogo del navegador (ver la sección @media print de components.css). -->
                     <button class="btn-secondary btn" id="export-pdf-btn" type="button"
                             title="Exportar este tablero a PDF, con los filtros aplicados">Exportar PDF</button>
-                    <!-- La planificación no es una vista de widgets (es un editor de días y %), así
-                         que no entra en la barra de tabs: se accede desde acá. -->
-                    <a class="btn-secondary btn" href="planificacion.php"
-                       title="Planificar la carga de la semana en % de un partido">Planificación</a>
                     <div class="tb-menu-wrap">
                         <button class="btn-secondary btn tb-more-btn" id="view-actions-btn" type="button"
                                 aria-haspopup="menu" aria-expanded="false" aria-controls="view-actions-menu" aria-label="Más acciones de la vista">⋯</button>
